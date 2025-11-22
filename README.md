@@ -58,11 +58,11 @@
     ```
 -   **安装项目依赖**:
     ```bash
-    uv pip install -e .
+    uv sync
     ```
 -   **启动 API 及定时任务服务**:
     ```bash
-    uv run python -m uvicorn src.python_cli_starter.main:api_app --reload
+    uvicorn src.python_cli_starter.main:api_app --reload
     ```
     服务启动后，定时任务会自动在后台运行。您可以在 `http://127.0.0.1:8888/docs` 查看 API 文档。
 

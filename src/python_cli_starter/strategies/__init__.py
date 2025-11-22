@@ -2,9 +2,8 @@
 
 from . import rsi_strategy
 from . import bollinger_bands_strategy
-from . import moving_average_cross_strategy
 from . import dual_confirmation_strategy
-from . import macd_strategy  # <-- 1. 导入新策略
+from . import macd_strategy
 
 # 策略注册表
 # 键 (key) 是API路径中使用的名称
@@ -12,7 +11,6 @@ from . import macd_strategy  # <-- 1. 导入新策略
 STRATEGY_REGISTRY = {
     "rsi": rsi_strategy.run_strategy,
     "bollinger_bands": bollinger_bands_strategy.run_strategy,
-    "ma_cross": moving_average_cross_strategy.run_strategy,
     "dual_confirmation": dual_confirmation_strategy.run_strategy,
-    "macd": macd_strategy.run_strategy, # <-- 2. 注册新策略
+    "macd": macd_strategy.run_strategy,
 }

@@ -7,37 +7,26 @@ name = "python-cli-starter"
 version = "0.1.0"
 description = "CLI"
 readme = "README.md"
-requires-python = ">=3.9,<3.13"
+requires-python = ">=3.9"
 license = "MIT"
 keywords = []
 authors = [
   { name = "lanseria", email = "zhangchao564265135@hotmail.com" },
 ]
-classifiers = [
-  "Development Status :: 3 - Alpha",
-  "Programming Language :: Python",
-  "Programming Language :: Python :: 3.7",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12", # Added 3.12
-]
+
 dependencies = [
-  "typer[all]>=0.9.0", # 使用 [all] 通常会包含 shell completion 等
+  "typer>=0.9.0",
   "rich>=13.0.0",
   "python-dotenv>=1.0.0", # 版本更新到 >=1.0.0 比较常见
   "beautifulsoup4>=4.12.0", # 版本更新
-  # "schedule>=1.2.2", # <-- 移除这一行
-  "lark-oapi>=1.4.18", # 版本更新
   "httpx>=0.25.0", # 您代码中用到了 httpx，但没在依赖中
   "pytz>=2025.2", # 添加 pytz"
   "pydantic>=2.11.4",
-  "sqlalchemy>=2.0.0", # ORM (对象关系映射) 库，用于操作数据库
-  "psycopg2-binary>=2.9.10", # PostgreSQL for Python 的驱动程序
+  "sqlalchemy>=2.0.44", # ORM (对象关系映射) 库，用于操作数据库
+  "psycopg2-binary>=2.9.11", # PostgreSQL for Python 的驱动程序
   "pandas>=2.0.0", # 用于数据处理，尤其是在计算均线时
   "fastapi>=0.115.12", # 用于搭建API服务
-  "uvicorn[standard]>=0.23.0", # ASGI服务器，用于运行FastAPI应用
+  "uvicorn[standard]>=0.38.0",
   "python-multipart>=0.0.20",
   "akshare>=1.17.5",
 ]
@@ -48,3 +37,7 @@ cli = "python_cli_starter.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/python_cli_starter"]
+
+[[tool.uv.index]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+default = true

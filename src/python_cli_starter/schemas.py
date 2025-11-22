@@ -1,6 +1,6 @@
 # schemas.py
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime, date
 from enum import Enum
 
@@ -30,6 +30,32 @@ class SignalType(str, Enum):
     BUY = "买入"
     SELL = "卖出"
     HOLD = "持有/观望"
+
+
+class FundRealtimeInfo(BaseModel):
+    """基金实时估值信息响应模型"""
+    fund_code: str
+    name: str
+    yesterday_nav: float
+    estimate_nav: Optional[float] = None
+    percentage_change: Optional[float] = None
+    update_time: Optional[datetime] = None
+
+class StockHolding(BaseModel):
+    """单只股票持仓明细"""
+    serial_number: int
+    stock_code: str
+    stock_name: str
+    percentage: float
+    share_holding: float
+    market_value: float
+    quarter: str
+
+class FundPortfolioResponse(BaseModel):
+    """基金持仓组合响应"""
+    fund_code: str
+    year: str
+    holdings: List[StockHolding]
 
 class StrategySignal(BaseModel):
     model_config = ConfigDict(from_attributes=True)

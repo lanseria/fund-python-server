@@ -119,18 +119,6 @@ API会通过标准的HTTP状态码来反馈错误。
 }
 ```
 
-
-### 3.3. 双均线交叉 (MA Cross) 策略
-
-*   **策略名称**: `ma_cross`
-*   **简介**: 经典的趋势跟踪策略。当短期均线（快线）上穿长期均线（慢线）时产生“金叉”买入信号；当快线下穿慢线时产生“死叉”卖出信号。
-*   **所需参数**: **必须**提供 `is_holding` 查询参数。
-*   **`metrics` 指标详解**:
-    *   `fast_ma_period` (integer): 快线计算周期，默认为20。
-    *   `fast_ma_value` (float): 最新的快线值。
-    *   `slow_ma_period` (integer): 慢线计算周期，默认为60。
-    *   `slow_ma_value` (float): 最新的慢线值。
-
 ### 3.4. 双重确认 (Dual Confirmation) 策略
 
 *   **策略名称**: `dual_confirmation`

@@ -5,6 +5,8 @@ from datetime import date, datetime
 import pandas as pd
 from typing import List, Optional, Dict, Any
 import logging
+import math  # <-- 新增 math 模块用于检查 NaN
+import akshare as ak
 
 logger = logging.getLogger(__name__)
 
@@ -218,3 +220,50 @@ def import_holdings_data(db: Session, data_to_import: List[Dict[str, Any]], over
     db.commit()
     logger.info(f"数据导入事务已提交。导入: {imported_count}, 跳过: {skipped_count}")
     return imported_count, skipped_count
+
+def get_fund_portfolio(fund_code: str, year: str) -> List[Dict[str, Any]]:
+    """
+    调用 AkShare 接口获取基金持仓数据。
+    """
+    logger.info(f"正在获取基金 {fund_code} 在 {year} 年的持仓数据...")
+    try:
+        # 调用 akshare 接口: fund_portfolio_hold_em
+        df = ak.fund_portfolio_hold_em(symbol=fund_code, date=year)
+        
+        if df is None or df.empty:
+            logger.warning(f"基金 {fund_code} 在 {year} 年没有查询到持仓数据。")
+            return []
+
+        holdings = []
+        
+        # 定义一个安全的转换函数，处理 NaN 和 Infinity
+        def safe_float(val):
+            try:
+                f_val = float(val)
+                if math.isnan(f_val) or math.isinf(f_val):
+                    return 0.0
+                return f_val
+            except (ValueError, TypeError):
+                return 0.0
+
+        # 遍历 DataFrame 并转换为字典列表
+        # 原始列名: 序号, 股票代码, 股票名称, 占净值比例, 持股数, 持仓市值, 季度
+        for _, row in df.iterrows():
+            holdings.append({
+                "serial_number": int(row['序号']),
+                "stock_code": str(row['股票代码']),
+                "stock_name": str(row['股票名称']),
+                "percentage": safe_float(row['占净值比例']),
+                "share_holding": safe_float(row['持股数']), # 单位: 万股
+                "market_value": safe_float(row['持仓市值']), # 单位: 万元
+                "quarter": str(row['季度'])
+            })
+            
+        logger.info(f"成功获取 {len(holdings)} 条持仓记录。")
+        return holdings
+
+    except Exception as e:
+        # 捕获潜在的网络错误或解析错误
+        logger.error(f"获取基金 {fund_code} 持仓数据时发生错误: {e}")
+        # 这里选择抛出异常，以便在上层 API 中捕获并返回 500 或 404
+        raise ValueError(f"无法获取数据，可能是代码错误或数据源暂不可用: {str(e)}")

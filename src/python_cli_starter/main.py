@@ -1,19 +1,14 @@
 # src/python_cli_starter/main.py (修改后)
-from fastapi import FastAPI, Depends, HTTPException, Query, Response, status, UploadFile, File, Form, Query
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Query, status, Query
 import inspect
-from datetime import date
-from typing import List, Optional
-from sqlalchemy.orm import Session
+from typing import Optional
 from contextlib import asynccontextmanager
-import json
 import logging
+from datetime import datetime
 
 # 1. 导入新的日志配置和我们自己的模块
 from .logger_config import setup_logging
-# from .scheduler import scheduler_runner # <-- 移除导入
-from . import models, crud, schemas, services
-from .models import SessionLocal
+from . import models, schemas, data_fetcher, services
 from .strategies import STRATEGY_REGISTRY
 from . import charts
 
@@ -39,116 +34,91 @@ async def lifespan(app: FastAPI):
 # 将FastAPI实例命名为 api_app，以示区分
 api_app = FastAPI(title="基金投资助手 API", lifespan=lifespan)
 
-# Dependency: 获取数据库会话
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-# --- API 路由定义 (保持不变) ---
-@api_app.get("/holdings/", response_model=list[schemas.Holding])
-def read_holdings(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    holdings = crud.get_holdings(db, skip=skip, limit=limit)
-    return holdings
-
-@api_app.post("/holdings/", response_model=schemas.Holding)
-def create_holding(holding: schemas.HoldingCreate, db: Session = Depends(get_db)):
-    return crud.create_holding(db=db, holding=holding)
-
-# 创建一个 Pydantic 模型用于接收更新请求的数据
-class HoldingUpdate(schemas.BaseModel):
-    holding_amount: float
-
-@api_app.put("/holdings/{fund_code}", response_model=schemas.Holding)
-def update_holding_endpoint(fund_code: str, holding_update: HoldingUpdate, db: Session = Depends(get_db)):
-    """
-    更新指定基金代码的持仓金额。
-    """
-    return crud.update_holding(db=db, code=fund_code, amount=holding_update.holding_amount)
-
-
-@api_app.delete("/holdings/{fund_code}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_holding_endpoint(fund_code: str, db: Session = Depends(get_db)):
-    """
-    删除指定基金代码的持仓记录及其所有历史数据。
-    """
-    crud.delete_holding(db=db, code=fund_code)
-    # 成功时返回 204 No Content，不需要响应体
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@api_app.get("/holdings/{fund_code}/history")
-def read_fund_history_with_ma(
-    fund_code: str,
-    start_date: Optional[date] = Query(None, description="查询开始日期 (格式: YYYY-MM-DD)"),
-    end_date: Optional[date] = Query(None, description="查询结束日期 (格式: YYYY-MM-DD)"),
-    ma: Optional[List[int]] = Query(None, description="需要计算的均线周期，可多选。例如: ma=5&ma=10&ma=20"),
-    db: Session = Depends(get_db)
-):
-    """
-    获取指定基金在特定时间范围内的历史净值及所选的移动平均线。
-    """
-    df = services.get_history_with_ma(
-        db=db,
-        code=fund_code,
-        start_date=start_date,
-        end_date=end_date,
-        ma_options=ma
-    )
-    
-    if df.empty:
-        raise HTTPException(status_code=404, detail=f"未找到基金代码为 '{fund_code}' 的历史数据，或指定时间范围内无数据。")
-
-    json_str = df.to_json(orient='records', date_format='iso', default_handler=None)
-    return JSONResponse(content=json.loads(json_str))
-
 # --- 3. 添加新的工具类路由 ---
-@api_app.get("/utils/export", summary="导出所有持仓数据")
-def export_data_endpoint(db: Session = Depends(get_db)):
+@api_app.get(
+    "/funds/{fund_code}/realtime", 
+    response_model=schemas.FundRealtimeInfo, 
+    summary="获取基金实时估值信息"
+)
+def get_fund_realtime(fund_code: str):
     """
-    将所有持仓的核心数据（代码和份额）导出为 JSON 文件。
-    """
-    export_data = services.export_holdings_data(db)
+    获取指定基金的实时估值数据。
     
-    return Response(
-        content=json.dumps(export_data, indent=2),
-        media_type="application/json",
-        headers={
-            "Content-Disposition": "attachment; filename=fund_holdings_export.json"
-        }
-    )
+    返回字段说明:
+    - **yesterday_nav**: 昨日单位净值 (dwjz)
+    - **estimate_nav**: 今日实时估值 (gsz)
+    - **percentage_change**: 估算涨跌幅 (gszzl)
+    - **update_time**: 估值更新时间 (gztime)
+    """
+    # 复用 data_fetcher 中高效的 HTTP 请求逻辑
+    data = data_fetcher.fetch_fund_realtime_estimate(fund_code)
+    
+    if not data:
+        raise HTTPException(status_code=404, detail=f"未找到基金 {fund_code} 的实时数据或代码无效。")
+    
+    try:
+        # 数据类型转换与安全处理
+        yesterday_nav = float(data.get('dwjz', 0))
+        estimate_nav = float(data['gsz']) if data.get('gsz') else None
+        percentage_change = float(data['gszzl']) if data.get('gszzl') else None
+        
+        update_time = None
+        if data.get('gztime'):
+            # 接口返回格式通常为 "2024-05-20 14:35"
+            # 在 Python 3.11+ 中，fromisoformat 处理这种格式更加稳健
+            try:
+                update_time = datetime.strptime(data['gztime'], "%Y-%m-%d %H:%M")
+            except ValueError:
+                # 容错处理，防止时间格式微调导致崩溃
+                logger.warning(f"时间格式解析失败: {data['gztime']}")
+                pass
 
-@api_app.post("/utils/import", summary="通过上传JSON文件导入持仓数据")
-async def import_data_endpoint(
-    db: Session = Depends(get_db),
-    file: UploadFile = File(..., description="包含持仓数据的 JSON 文件"),
-    overwrite: bool = Form(False, description="是否覆盖所有现有数据")
+        return schemas.FundRealtimeInfo(
+            fund_code=data.get('fundcode', fund_code),
+            name=data.get('name', '未知'),
+            yesterday_nav=yesterday_nav,
+            estimate_nav=estimate_nav,
+            percentage_change=percentage_change,
+            update_time=update_time
+        )
+    except Exception as e:
+        logger.error(f"解析基金 {fund_code} 实时数据时发生错误: {e}")
+        raise HTTPException(status_code=500, detail=f"数据解析错误: {str(e)}")
+@api_app.get(
+    "/funds/{fund_code}/portfolio", 
+    response_model=schemas.FundPortfolioResponse, 
+    summary="获取基金股票持仓明细"
+)
+def get_fund_portfolio_endpoint(
+    fund_code: str,
+    year: str = Query(..., description="查询年份，例如 '2024'"),
 ):
     """
-    从上传的 JSON 文件中导入持仓数据。
-    可以增量添加，也可以选择覆盖模式删除所有旧数据。
+    获取指定基金在特定年份的股票投资组合（前十大重仓股等）。
+    
+    **数据来源**: 天天基金网 (通过 AkShare)
+    
+    **返回字段**:
+    - **percentage**: 占净值比例 (%)
+    - **share_holding**: 持股数 (万股)
+    - **market_value**: 持仓市值 (万元)
     """
-    if not file.filename.endswith('.json'):
-        raise HTTPException(status_code=400, detail="文件格式必须是 JSON。")
+    try:
+        holdings_data = services.get_fund_portfolio(fund_code, year)
         
-    content = await file.read()
-    try:
-        data_to_import = json.loads(content)
-        if not isinstance(data_to_import, list):
-            raise ValueError("JSON content must be a list of objects.")
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.error(f"Failed to parse uploaded JSON file: {e}")
-        raise HTTPException(status_code=400, detail="JSON 文件内容无效或格式不正确。")
-    
-    try:
-        imported, skipped = services.import_holdings_data(db, data_to_import, overwrite)
-        return {"message": "导入完成", "imported": imported, "skipped": skipped}
+        # 即使列表为空也返回成功的响应，只是 holdings 为空列表
+        return schemas.FundPortfolioResponse(
+            fund_code=fund_code,
+            year=year,
+            holdings=holdings_data
+        )
+    except ValueError as ve:
+        # 服务层抛出的已知错误
+        raise HTTPException(status_code=404, detail=str(ve))
     except Exception as e:
-        logger.exception(f"An unexpected error occurred during the import process for file '{file.filename}'.")
-        raise HTTPException(status_code=500, detail=f"导入过程中发生错误: {str(e)}")
-    
+        logger.exception(f"API Error: get_fund_portfolio failed for {fund_code}")
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
+
 @api_app.get(
     "/strategies/{strategy_name}/{fund_code}", 
     response_model=schemas.StrategySignal, 
