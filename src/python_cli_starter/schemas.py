@@ -67,3 +67,17 @@ class StrategySignal(BaseModel):
     latest_date: date
     latest_close: float
     metrics: Dict[str, Any]
+
+class IndexTechnicalInfo(BaseModel):
+    """单个指数的技术面信息"""
+    name: str
+    current: float
+    change_pct: float
+    ma_status: str  # 例如: "above_MA5, below_MA20"
+    macd_status: str # 例如: "golden_cross", "death_cross", "widening"
+    technical_trend: str # 例如: "bullish", "bearish", "rebound"
+
+class MarketOverviewResponse(BaseModel):
+    """市场概览响应"""
+    timestamp: datetime
+    indices: Dict[str, IndexTechnicalInfo]

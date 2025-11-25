@@ -28,7 +28,7 @@ dependencies = [
   "fastapi>=0.115.12", # 用于搭建API服务
   "uvicorn[standard]>=0.38.0",
   "python-multipart>=0.0.20",
-  "akshare>=1.17.5",
+  "akshare>=1.17.87",
 ]
 
 [project.scripts]

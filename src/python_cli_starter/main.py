@@ -8,7 +8,7 @@ from datetime import datetime
 
 # 1. 导入新的日志配置和我们自己的模块
 from .logger_config import setup_logging
-from . import models, schemas, data_fetcher, services
+from . import models, schemas, data_fetcher, services, market_analysis
 from .strategies import STRATEGY_REGISTRY
 from . import charts
 
@@ -217,3 +217,31 @@ def get_rsi_chart_endpoint(fund_code: str):
         )
         
     return chart_data
+
+@api_app.get(
+    "/market/overview",
+    response_model=schemas.MarketOverviewResponse,
+    summary="获取宽基指数市场概览",
+    tags=["Market"]
+)
+def get_market_overview():
+    """
+    获取主要宽基指数（上证指数、沪深300、创业板指）的实时/收盘数据及技术面分析。
+    
+    返回包含:
+    - **current**: 当前点位
+    - **change_pct**: 涨跌幅 (小数格式, 如 0.01 代表 1%)
+    - **ma_status**: 均线状态 (相对于 MA5, MA20)
+    - **macd_status**: MACD 状态 (金叉 golden_cross / 死叉 death_cross / 多头 bullish_zone / 空头 bearish_zone)
+    - **technical_trend**: 技术形态 (bullish 多头 / bearish 空头 / rebound 反弹 / pullback 回调)
+    """
+    logger.info("收到市场概览数据请求")
+    try:
+        indices_data = market_analysis.get_market_overview_data()
+        return schemas.MarketOverviewResponse(
+            timestamp=datetime.now(),
+            indices=indices_data
+        )
+    except Exception as e:
+        logger.exception("获取市场概览数据时发生未知错误")
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
