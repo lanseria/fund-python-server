@@ -1,185 +1,163 @@
-# Fund Investment Assistant - Backend Server
+# 基金策略分析 API 服务
 
-这是基金投资助手项目的 **Python 后端服务**。它使用 FastAPI, SQLAlchemy 和 Typer 构建，负责所有核心业务逻辑、数据处理和 API 服务。
+基于 FastAPI 构建的基金量化策略分析服务，提供多种技术指标策略（RSI、MACD、布林带、双重确认）的交易信号分析功能。
 
-该项目以**持有份额**为核心，能够动态追踪资产价值，提供实时的盘中估算。
+## ✨ 功能特性
 
-## ✨ 主要功能
+- **策略分析**: 支持四种量化策略的实时分析
+  - RSI 策略: 基于相对强弱指数，超卖买入、超买卖出
+  - MACD 策略: 趋势跟踪，金叉买入、死叉卖出
+  - 布林带策略: 反转策略，下轨买入、回归中轨卖出
+  - 双重确认策略: 趋势 + RSI 择时
 
--   **份额核心制**: 用户通过输入买入金额来建立持仓，系统会自动根据当日净值计算并记录**持有份额**。后续所有资产价值均基于此份额动态计算。
--   **动态资产追踪**:
-    -   **每日校准**: 每日自动获取最新基金净值，并用 `份额 × 最新净值` 的方式更新您的**持有金额**，确保其反映真实资产价值。
-    -   **盘中估算**: 在交易时段内，定时获取实时估值，动态计算并更新**预估金额**、**预估涨跌幅**和**估值更新时间**。
--   **RESTful API**: 提供一套完整的 API，用于持仓管理（增删改查）和带有灵活均线选项的历史数据查询。
--   **命令行工具 (CLI)**: 提供了一套功能对等的管理命令，方便在服务器端进行数据导入导出、手动同步、持仓管理等所有操作。
--   **数据导入/导出**: 支持通过 JSON 文件备份和恢复核心的持仓数据（基金代码和份额）。
--   **数据库支持**: 使用 PostgreSQL，并支持自定义 Schema 进行数据隔离。
+- **RESTful API**: 简洁的 API 设计，易于集成
+- **数据源**: 使用 AkShare 获取基金净值数据
+- **Docker 支持**: 多阶段构建优化，支持容器化部署
 
 ## 🛠️ 技术栈
 
--   **Web 框架**: FastAPI
--   **命令行框架**: Typer
--   **数据库 ORM**: SQLAlchemy
--   **数据库**: PostgreSQL
--   **项目管理**: uv (替代 pip 和 venv)
--   **定时任务**: Schedule
--   **HTTP 客户端**: httpx
+- **Web 框架**: FastAPI >=0.115.12
+- **数据验证**: Pydantic >=2.11.4
+- **数据处理**: Pandas >=2.0.0
+- **数据源**: AkShare >=1.17.87
+- **包管理**: uv
+- **测试框架**: Pytest >=8.0.0
 
-## 🚀 本地开发环境设置
+## 🚀 快速开始
 
-### 1. 环境准备
+### 本地运行
 
--   **安装 uv**:
-    ```bash
-    # macOS / Linux
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    ```
--   **安装 PostgreSQL**: 确保本地已安装并运行 PostgreSQL 服务。
--   **创建数据库**:
-    ```sql
-    CREATE DATABASE fund_assistant;
-    ```
-
-### 2. 项目配置
-
--   **创建 `.env` 文件**: 在项目根目录下，创建一个名为 `.env` 的文件，并填入您的本地数据库配置。
-    ```dotenv
-    # .env
-    DATABASE_URL="postgresql://your_user:your_password@localhost:5432/fund_assistant"
-    DB_SCHEMA="fund_app"
-    ```
-
-### 3. 安装与运行
-
--   **创建并激活虚拟环境**:
-    ```bash
-    uv venv
-    source .venv/bin/activate
-    ```
--   **安装项目依赖**:
-    ```bash
-    uv sync
-    ```
--   **启动 API 及定时任务服务**:
-    ```bash
-    uvicorn src.python_cli_starter.main:api_app --reload
-    ```
-    服务启动后，定时任务会自动在后台运行。您可以在 `http://127.0.0.1:8888/docs` 查看 API 文档。
-
----
-
-## ⌨️ 命令行 (CLI) 用法
-
-所有命令都通过 `uv run cli` 执行，无需手动激活虚拟环境。
-
--   **查看所有可用命令**:
-    ```bash
-    uv run cli --help
-    ```
-
-### 查看持仓
-
-以美观的表格形式列出所有持仓基金及其预估盈亏。
 ```bash
-uv run cli list-holdings
+# 安装依赖
+uv sync
+
+# 启动服务
+uvicorn src.python_cli_starter.main:app --reload
 ```
 
-### 添加新的持仓
-当您添加一笔投资时，系统会根据您输入的金额和当时的基金净值，自动计算出您持有的**份额**。
-```bash
-# 示例：投资 5000 元到一只基金
-uv run cli add-holding --code "161725" --amount 5000
-```
--   `--code` / `-c`: 基金代码 (**必填**)
--   `--amount` / `-a`: **买入**金额 (**必填**)
--   `--name` / `-n`: 基金名称 (可选, 程序会自动获取)
+服务启动后访问：`http://localhost:8000/docs`
 
-### 更新持仓金额
-此操作会调整您的总资产至新指定的金额，并根据最新的基金净值**重新计算您的总份额**。
-```bash
-# 示例：将代码为 161725 的基金总资产调整为 6500 元
-uv run cli update-holding --code "161725" --amount 6500
-```
--   `--code` / `-c`: 要更新的基金代码 (**必填**)
--   `--amount` / `-a`: **新的总**持有金额 (**必填**)
+### 运行测试
 
-### 删除持仓记录
-此操作会进行交互式确认，防止误删。
 ```bash
-# 示例：删除代码为 161725 的基金
-uv run cli delete-holding 161725
-```
-> 要跳过确认，可添加 `--force` 或 `-f` 标志。
+# 安装测试依赖
+uv sync --extra test
 
-### 手动同步历史数据
-立即触发一次所有持仓基金的历史净值同步任务，并根据最新净值校准持仓金额。
-```bash
-uv run cli sync-history
+# 运行所有测试
+uv run pytest tests/ -v
+
+# 运行特定测试
+uv run pytest tests/ -k test_rsi -v
 ```
 
-### 导入/导出数据
-备份和恢复核心的持仓数据（代码和份额）。
+## 📡 API 端点
+
+### 健康检查
 ```bash
-# 导出所有持仓到 a_backup.json 文件
-uv run cli export-data -o a_backup.json
-
-# 从 a_backup.json 文件增量导入数据
-uv run cli import-data a_backup.json
-
-# 覆盖式导入（会先删除所有旧数据）
-uv run cli import-data a_backup.json --overwrite
+GET /health
 ```
 
----
-
-## 🐳 生产环境 Docker 部署
-
-我们使用 Docker 和 Docker Compose 进行生产环境的部署。部署流程分为**构建镜像**和**运行容器**两个步骤。
-
-### 1. 环境准备
-
--   **安装 Docker 和 Docker Compose**。
--   **准备外部 Docker 网络**: 如果网络不存在，请先创建它：
-    ```bash
-    docker network create shared-db-network
-    ```
--   **准备生产环境变量文件**: 创建 `.env.prod` 文件。
-    ```dotenv
-    # .env.prod
-    # 注意：DATABASE_URL 中的主机名应为数据库容器在 Docker 网络中的服务名
-    DATABASE_URL="postgresql://prod_user:prod_password@postgres_container_name:5432/prod_db"
-    DB_SCHEMA="fund_production"
-    ```
-
-### 2. 构建 Docker 镜像 (打包)
-
+### 获取策略列表
 ```bash
-docker build -t fund-strategies-service:latest .
+GET /strategies
+```
+返回所有可用策略名称。
+
+### 执行策略分析
+```bash
+GET /strategies/{strategy_name}/{fund_code}
 ```
 
-### 3. 运行服务 (Docker Compose)
+参数说明：
+- `strategy_name`: 策略名称（`rsi`, `macd`, `bollinger_bands`, `dual_confirmation`）
+- `fund_code`: 基金代码（6位数字）
+- `is_holding`: (可选) 对于需要持仓状态的策略，指定当前是否持有该基金（`true`/`false`）
 
-启动服务：
+#### 示例
+
 ```bash
+# RSI 策略
+curl http://localhost:8000/strategies/rsi/161725
+
+# MACD 策略（需要持仓状态）
+curl http://localhost:8000/strategies/macd/161725?is_holding=false
+
+# 布林带策略
+curl http://localhost:8000/strategies/bollinger_bands/161725?is_holding=true
+
+# 双重确认策略
+curl http://localhost:8000/strategies/dual_confirmation/161725?is_holding=false
+```
+
+## 📊 响应格式
+
+```json
+{
+  "fund_code": "161725",
+  "strategy_name": "rsi",
+  "signal": "持有/观望",
+  "reason": "RSI (45.23) 处于 30 和 70 之间的中间区域。",
+  "latest_date": "2026-01-20",
+  "latest_close": 1.2345,
+  "metrics": {
+    "rsi_period": 14,
+    "rsi_value": 45.23,
+    "rsi_upper_band": 70.0,
+    "rsi_lower_band": 30.0
+  }
+}
+```
+
+## 🐳 Docker 部署
+
+### 构建并启动
+
+```bash
+# 构建镜像
+docker build -t fund-strategies-api:latest .
+
+# 启动服务
 docker compose up -d
 ```
 
-### 4. 常用 Docker 命令
+### 常用命令
 
--   **查看服务日志**:
-    ```bash
-    docker compose logs -f fund-strategies-service
-    ```
--   **停止并移除容器**:
-    ```bash
-    docker compose down
-    ```
--   **在运行的容器中执行 CLI 命令**:
-    ```bash
-    docker compose exec fund-strategies-service cli sync-history
-    ```
+```bash
+# 查看日志
+docker compose logs -f
 
----
+# 停止服务
+docker compose down
+
+# 重新构建并启动
+docker compose up -d --build
+```
+
+## 🧪 策略扩展
+
+新增自定义策略步骤：
+
+1. 在 `strategies/` 目录创建新模块，例如 `my_strategy.py`
+2. 实现策略函数：
+
+```python
+def run_strategy(fund_code: str, is_holding: bool = False) -> dict:
+    # 获取数据、计算指标、生成信号
+    return {
+        "signal": "买入" | "卖出" | "持有/观望",
+        "reason": "信号原因说明",
+        "latest_date": date,
+        "latest_close": float,
+        "metrics": {"指标名": 值, ...}
+    }
+```
+
+3. 在 `strategies/__init__.py` 注册策略：
+
+```python
+from . import my_strategy
+STRATEGY_REGISTRY["my_strategy"] = my_strategy.run_strategy
+```
 
 ## 📄 License
 
