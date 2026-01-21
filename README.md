@@ -168,7 +168,7 @@ docker compose up -d
 
 -   **查看服务日志**:
     ```bash
-    docker compose logs -f fund_service
+    docker compose logs -f fund-strategies-service
     ```
 -   **停止并移除容器**:
     ```bash
@@ -176,7 +176,7 @@ docker compose up -d
     ```
 -   **在运行的容器中执行 CLI 命令**:
     ```bash
-    docker compose exec fund_service cli sync-history
+    docker compose exec fund-strategies-service cli sync-history
     ```
 
 ---
