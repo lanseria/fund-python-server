@@ -2,24 +2,23 @@ services:
   fund_strategies_service:
     build: .
     container_name: fund_strategies_service
-    env_file:
-      - .env.prod
     ports:
-      - "8000:8000"
+      - "8800:8800"
     command: >
-      sh -c "python -m uvicorn src.python_cli_starter.main:app --host 0.0.0.0 --port 8000"
+      sh -c "python -m uvicorn src.python_cli_starter.main:app --host 0.0.0.0 --port 8800"
     restart: unless-stopped
-    # networks:
-    #   - shared_app_net
+    networks:
+      - shared_app_net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # 使用 python 尝试连接本地端口，不需要依赖 curl
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.connect(('localhost', 8800))"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
 
-# networks:
-#   shared_app_net:
-#     external: true
-#     name: shared-db-network
+networks:
+  shared_app_net:
+    external: true
+    name: shared-db-network
