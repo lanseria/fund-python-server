@@ -8,6 +8,7 @@ from datetime import datetime
 
 from .strategies import STRATEGY_REGISTRY
 from . import schemas
+from . import charts
 
 # 日志配置
 logging.basicConfig(
@@ -121,3 +122,27 @@ def health_check():
         status='ok',
         timestamp=datetime.now().isoformat()
     )
+
+@app.get(
+    '/charts/rsi/{fund_code}',
+    response_model=schemas.RsiChartResponse,
+    summary='获取 RSI 策略图表数据',
+    tags=['Charts']
+)
+def get_rsi_chart(fund_code: str):
+    """
+    获取指定基金的 RSI 策略全量历史数据，用于前端 ECharts 绘图。
+    包含：
+    - 历史净值
+    - RSI 指标值
+    - 基于策略生成的买卖信号点
+    """
+    chart_data = charts.get_rsi_chart_data(fund_code)
+    
+    if not chart_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"无法获取基金 {fund_code} 的图表数据。"
+        )
+        
+    return chart_data

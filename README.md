@@ -47,7 +47,7 @@ uv sync --extra test
 uv run pytest tests/ -v
 
 # 运行特定测试
-uv run pytest tests/ -k test_rsi -v
+uv run pytest tests/ -k TestChartsAPI -v
 ```
 
 ## 📡 API 端点

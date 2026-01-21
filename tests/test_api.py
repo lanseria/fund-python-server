@@ -235,3 +235,75 @@ class TestSchemas:
         required_fields = ['fund_code', 'strategy_name', 'signal', 'reason', 'latest_date', 'latest_close', 'metrics']
         for field in required_fields:
             assert field in data
+
+class TestChartsAPI:
+    """图表 API 测试"""
+
+    @pytest.fixture
+    def mock_akshare_history(self):
+        """模拟较长的历史数据"""
+        today = datetime.now()
+        dates = pd.date_range(end=today, periods=60, freq='D')
+        # 构造正弦波数据以产生买卖信号
+        import numpy as np
+        x = np.linspace(0, 4 * np.pi, 60)
+        nav_values = 1.0 + 0.2 * np.sin(x)
+        
+        df = pd.DataFrame({
+            '净值日期': dates.strftime('%Y-%m-%d'),
+            '单位净值': nav_values
+        })
+        return df
+
+    @patch('python_cli_starter.charts.ak.fund_open_fund_info_em')
+    def test_get_rsi_chart_success(self, mock_akshare, mock_akshare_history):
+        """测试 RSI 图表接口成功响应"""
+        mock_akshare.return_value = mock_akshare_history
+
+        response = client.get('/charts/rsi/161725')
+        
+        assert response.status_code == 200
+        data = response.json()
+        
+        # 验证响应模型结构 (RsiChartResponse)
+        assert 'dates' in data
+        assert 'netValues' in data
+        assert 'rsiValues' in data
+        assert 'signals' in data
+        assert 'config' in data
+        
+        # 验证配置参数
+        assert data['config']['rsiPeriod'] == 14
+        assert data['config']['rsiUpper'] == 70.0
+        
+        # 验证数据包含 None (对应 Python 的 None/NaN)
+        # 初始阶段无法计算 RSI，所以 rsiValues 前面应该是 null
+        assert data['rsiValues'][0] is None
+
+    @patch('python_cli_starter.charts.ak.fund_open_fund_info_em')
+    def test_get_rsi_chart_not_found(self, mock_akshare):
+        """测试获取不存在的数据"""
+        # 模拟返回空 DataFrame
+        mock_akshare.return_value = pd.DataFrame()
+
+        response = client.get('/charts/rsi/999999')
+        
+        assert response.status_code == 404
+        data = response.json()
+        assert 'detail' in data
+        assert '无法获取' in data['detail']
+
+    @patch('python_cli_starter.charts.ak.fund_open_fund_info_em')
+    def test_get_rsi_chart_api_error(self, mock_akshare):
+        """测试底层 API 异常"""
+        mock_akshare.side_effect = Exception("API Connection Error")
+
+        # 这里的异常会被 charts.py 捕获并返回 None，最终导致 404
+        # 或者是根据 main.py 的全局异常处理，这取决于 charts.py 的实现细节
+        # 在你提供的 charts.py 代码中，异常被捕获并打印日志，返回 None
+        # 所以 main.py 会抛出 404
+        
+        response = client.get('/charts/rsi/161725')
+        
+        assert response.status_code == 404
+        assert '无法获取' in response.json()['detail']
