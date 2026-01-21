@@ -15,7 +15,7 @@ RSI_LOWER = 30.0
 def get_latest_fund_data(fund_symbol: str):
     """获取基金最近100天的净值数据"""
     logger.info(f"[RSI Strategy] 正在为基金 {fund_symbol} 获取最新净值数据...")
-    start_date = (datetime.today() - timedelta(days=100)).strftime('%Y%m%d')
+    start_date = datetime.today() - timedelta(days=100)
     
     try:
         # 使用 akshare 获取数据

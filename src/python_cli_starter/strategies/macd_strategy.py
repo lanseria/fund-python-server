@@ -17,7 +17,7 @@ def get_latest_fund_data(fund_symbol: str) -> pd.DataFrame:
     """获取基金最近150天的净值数据"""
     logger.info(f"[MACD Strategy] 正在为基金 {fund_symbol} 获取最新净值数据...")
     # 缓冲期设为150天，足够计算26周期的EMA
-    start_date = (datetime.today() - timedelta(days=150)).strftime('%Y%m%d')
+    start_date = datetime.today() - timedelta(days=150)
     
     try:
         fund_nav_df = ak.fund_open_fund_info_em(symbol=fund_symbol, indicator="单位净值走势")

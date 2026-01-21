@@ -1,43 +1,36 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ['hatchling']
+build-backend = 'hatchling.build'
 
 [project]
-name = "python-cli-starter"
-version = "0.1.0"
-description = "CLI"
-readme = "README.md"
-requires-python = ">=3.9"
-license = "MIT"
-keywords = []
+name = 'fund-strategies-api'
+version = '1.0.0'
+description = '基金策略分析 API 服务'
+readme = 'README.md'
+requires-python = '>=3.9'
+license = 'MIT'
 authors = [
-  { name = "lanseria", email = "zhangchao564265135@hotmail.com" },
+  { name = 'lanseria', email = 'zhangchao564265135@hotmail.com' },
 ]
 
 dependencies = [
-  "typer>=0.9.0",
-  "rich>=13.0.0",
-  "python-dotenv>=1.0.0", # 版本更新到 >=1.0.0 比较常见
-  "beautifulsoup4>=4.12.0", # 版本更新
-  "httpx>=0.25.0", # 您代码中用到了 httpx，但没在依赖中
-  "pytz>=2025.2", # 添加 pytz"
-  "pydantic>=2.11.4",
-  "sqlalchemy>=2.0.44", # ORM (对象关系映射) 库，用于操作数据库
-  "psycopg2-binary>=2.9.11", # PostgreSQL for Python 的驱动程序
-  "pandas>=2.0.0", # 用于数据处理，尤其是在计算均线时
-  "fastapi>=0.115.12", # 用于搭建API服务
-  "uvicorn[standard]>=0.38.0",
-  "python-multipart>=0.0.20",
-  "akshare>=1.17.87",
+  'fastapi>=0.115.12',
+  'uvicorn[standard]>=0.38.0',
+  'pydantic>=2.11.4',
+  'pandas>=2.0.0',
+  'akshare>=1.17.87',
 ]
 
-[project.scripts]
-# 将入口点从 main:app 修改为 cli:main
-cli = "python_cli_starter.cli:main"
+[project.optional-dependencies]
+test = [
+  'pytest>=8.0.0',
+  'pytest-asyncio>=0.23.0',
+  'httpx>=0.25.0',
+]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/python_cli_starter"]
+packages = ['src/python_cli_starter']
 
 [[tool.uv.index]]
-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+url = 'https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple'
 default = true

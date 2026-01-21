@@ -16,7 +16,7 @@ def get_latest_fund_data(fund_symbol: str) -> pd.DataFrame:
     """获取基金最近200天的净值数据"""
     logger.info(f"[BBands Strategy] 正在为基金 {fund_symbol} 获取最新净值数据...")
     # 缓冲期增加到200天以确保50周期计算的稳定性
-    start_date = (datetime.today() - timedelta(days=200)).strftime('%Y%m%d')
+    start_date = datetime.today() - timedelta(days=200)
     
     try:
         fund_nav_df = ak.fund_open_fund_info_em(symbol=fund_symbol, indicator="单位净值走势")
