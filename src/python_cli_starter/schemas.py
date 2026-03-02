@@ -58,3 +58,21 @@ class RsiChartResponse(BaseModel):
     rsiValues: list[float | None]
     signals: ChartSignals
     config: RsiConfig
+
+class SectorInfo(BaseModel):
+    """板块简要信息"""
+    name: str            # f14 板块名称
+    
+    market_cap: float    # f20 总市值 (原始值)
+    market_cap_desc: str # 格式化后的市值 (例如: 99186.73 亿)
+    
+    turnover_rate: float      # f8 换手率 (原始值)
+    turnover_rate_desc: str   # 格式化后的换手率 (例如: 0.16%)
+    
+    change_percent: float     # f3 涨跌幅 (原始值)
+    change_percent_desc: str  # 格式化后的涨跌幅 (例如: 1.25%)
+
+class SectorListResponse(BaseModel):
+    """板块列表响应"""
+    count: int
+    sectors: list[SectorInfo]

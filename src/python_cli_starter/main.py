@@ -9,6 +9,7 @@ from datetime import datetime
 from .strategies import STRATEGY_REGISTRY
 from . import schemas
 from . import charts
+from . import market
 
 # 日志配置
 logging.basicConfig(
@@ -146,3 +147,33 @@ def get_rsi_chart(fund_code: str):
         )
         
     return chart_data
+
+@app.get(
+    '/market/sectors',
+    response_model=schemas.SectorListResponse,
+    summary='获取行业板块数据',
+    tags=['Market']
+)
+async def get_sector_list():
+    """
+    获取所有行业板块的实时数据 (转发自东方财富)。
+    
+    返回字段说明:
+    - **name**: 板块名称
+    - **market_cap**: 总市值 (原始数值)
+    - **market_cap_desc**: 总市值 (格式化，单位：亿)
+    - **turnover_rate**: 换手率 (原始数值)
+    - **turnover_rate_desc**: 换手率 (格式化，百分比)
+    """
+    sectors = await market.fetch_eastmoney_sectors()
+    
+    if sectors is None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="无法从上游数据源(东方财富)获取数据"
+        )
+        
+    return schemas.SectorListResponse(
+        count=len(sectors),
+        sectors=sectors
+    )
