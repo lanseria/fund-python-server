@@ -177,3 +177,28 @@ async def get_sector_list():
         count=len(sectors),
         sectors=sectors
     )
+
+@app.get(
+    '/market/ths_sectors',
+    response_model=schemas.ThsSectorListResponse,
+    summary='获取同花顺行业板块数据',
+    tags=['Market']
+)
+async def get_ths_sector_list():
+    """
+    获取同花顺行业板块数据 (解析 HTML)。
+    
+    包含字段:
+    - **name**: 板块名称
+    - **change_percent**: 涨跌幅 (%)
+    - **net_inflow**: 净流入 (亿元)
+    - **up_count**: 上涨家数
+    - **down_count**: 下跌家数
+    - **turnover_ratio**: 成交额占比 (%)
+    """
+    sectors = await market.fetch_ths_sectors()
+    
+    return schemas.ThsSectorListResponse(
+        count=len(sectors),
+        sectors=sectors
+    )

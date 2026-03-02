@@ -76,3 +76,17 @@ class SectorListResponse(BaseModel):
     """板块列表响应"""
     count: int
     sectors: list[SectorInfo]
+
+class ThsSectorInfo(BaseModel):
+    """同花顺板块信息"""
+    name: str             # 板块名称
+    change_percent: float # 涨跌幅 (%)
+    net_inflow: float     # 净流入 (亿元)
+    up_count: int         # 上涨家数
+    down_count: int       # 下跌家数
+    turnover_ratio: float # 成交额占比 (%)
+
+class ThsSectorListResponse(BaseModel):
+    """同花顺板块列表响应"""
+    count: int
+    sectors: list[ThsSectorInfo]
