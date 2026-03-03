@@ -8,6 +8,7 @@ import asyncio
 import math
 from bs4 import BeautifulSoup
 from typing import List, Dict, Any, Optional, Tuple
+from playwright.async_api import async_playwright, Page
 from .schemas import SectorInfo, ThsSectorInfo
 
 logger = logging.getLogger(__name__)
@@ -169,46 +170,33 @@ async def fetch_eastmoney_sectors() -> Optional[List[SectorInfo]]:
     
 # --- 同花顺数据处理逻辑 ---
 
-async def _fetch_ths_page(client: httpx.AsyncClient, page: int) -> List[Dict[str, Any]]:
+async def _fetch_ths_page(page: Page, page_num: int) -> List[Dict[str, Any]]:
     """
-    获取并解析同花顺单页 HTML 数据。
+    获取并解析同花顺单页 HTML 数据（使用 Playwright 模拟浏览器）。
     注意：返回的是包含原始成交额的字典列表，用于后续计算占比。
     """
-    url = f"https://q.10jqka.com.cn/thshy/index/field/199112/order/desc/page/{page}/ajax/1/"
+    url = f"https://q.10jqka.com.cn/thshy/index/field/199112/order/desc/page/{page_num}/ajax/1/"
     
-    headers = {
-        'accept': 'text/html, */*; q=0.01',
-        'accept-language': 'zh-CN,zh;q=0.9',
-        'dnt': '1',
-        'hexin-v': 'Azbr76JdQyRbizdAeVXNj61Uh2c9V3TrzJKuwKAeIL-1TdiZCOfKoZwr_g5z',
-        'priority': 'u=1, i',
-        'referer': 'https://q.10jqka.com.cn/thshy/',
-        'sec-ch-ua': '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-origin',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-        'x-requested-with': 'XMLHttpRequest'
-    }
-
     try:
-        response = await client.get(url, headers=headers, timeout=10.0)
+        # 访问页面，带有 referer 有助于绕过部分基础检测
+        response = await page.goto(url, referer="https://q.10jqka.com.cn/thshy/")
+        # 等待页面 DOM 加载完成
+        await page.wait_for_load_state("domcontentloaded")
         
-        if 'charset=gbk' in response.headers.get('content-type', '').lower() or response.encoding == 'ISO-8859-1':
-            response.encoding = 'gbk'
-            
-        html_content = response.text
+        html_content = await page.content()
         
-        if "Nginx forbidden" in html_content or response.status_code == 403:
-            logger.error(f"[THS Page {page}] 请求被拦截 (403/Forbidden)")
-            return []
+        if "Nginx forbidden" in html_content or (response and response.status == 403):
+            logger.error(f"[THS Page {page_num}] 请求被拦截 (403/Forbidden)")
+            return[]
 
         soup = BeautifulSoup(html_content, "html.parser")
         table_rows = soup.select("tbody tr")
         
-        raw_results = []
+        # 兼容处理：如果没有 tbody 标签，直接选 tr
+        if not table_rows:
+            table_rows = soup.select("tr")
+            
+        raw_results =[]
         for row in table_rows:
             cols = row.find_all("td")
             if len(cols) < 8:
@@ -245,7 +233,7 @@ async def _fetch_ths_page(client: httpx.AsyncClient, page: int) -> List[Dict[str
                 raw_results.append({
                     "name": name,
                     "change_percent": change_percent,
-                    "raw_amount": raw_amount, # 暂存，不直接放入 Schema
+                    "raw_amount": raw_amount,
                     "net_inflow": net_inflow,
                     "up_count": up_count,
                     "down_count": down_count
@@ -256,28 +244,54 @@ async def _fetch_ths_page(client: httpx.AsyncClient, page: int) -> List[Dict[str
         return raw_results
 
     except Exception as e:
-        logger.error(f"[THS Page {page}] 解析失败: {e}")
+        logger.error(f"[THS Page {page_num}] 解析失败: {e}")
         return []
 
 async def fetch_ths_sectors() -> List[ThsSectorInfo]:
     """
-    并发获取同花顺板块数据，并计算成交额占比。
+    使用 Playwright 模拟真实浏览器并发获取同花顺板块数据，并计算成交额占比。
+    该方法能够有效让网站执行自身 JS 并生成合格的 hexin-v/v 的 cookie 信息。
     """
-    async with httpx.AsyncClient() as client:
-        # 并发请求2页数据
-        tasks = [
-            _fetch_ths_page(client, 1),
-            _fetch_ths_page(client, 2)
+    async with async_playwright() as p:
+        # 启动无头浏览器，添加参数尽力绕过简单的机器人检测
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
+        
+        # 创建上下文，设置常见的 User-Agent 与窗口大小
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080}
+        )
+        
+        # 第一步：关键点！先访问主页，让网页自动执行 JS 生成正确的 cookie (含 v/hexin-v)
+        main_page = await context.new_page()
+        try:
+            logger.info("正在访问同花顺主页以获取认证信息(自动计算 hexin-v)...")
+            await main_page.goto("https://q.10jqka.com.cn/thshy/", wait_until="networkidle", timeout=15000)
+        except Exception as e:
+            logger.warning(f"访问同花顺主页遇到异常（不一定会影响后续爬取）: {e}")
+        
+        # 第二步：使用已经带有有效 Cookie 的上下文请求数据页 (因为同上下文的 cookie 共享)
+        page1 = await context.new_page()
+        page2 = await context.new_page()
+        
+        tasks =[
+            _fetch_ths_page(page1, 1),
+            _fetch_ths_page(page2, 2)
         ]
         
         results = await asyncio.gather(*tasks)
         
-        all_raw_data = []
+        await browser.close()
+        
+        all_raw_data =[]
         for page_data in results:
             all_raw_data.extend(page_data)
         
         if not all_raw_data:
-            return []
+            return[]
 
         # 1. 计算所有板块的总成交额
         total_market_amount = sum(item["raw_amount"] for item in all_raw_data)
@@ -286,7 +300,7 @@ async def fetch_ths_sectors() -> List[ThsSectorInfo]:
         if total_market_amount == 0:
             total_market_amount = 1.0 
 
-        final_sectors = []
+        final_sectors =[]
         for item in all_raw_data:
             # 2. 计算占比: (板块成交额 / 总成交额) * 100
             ratio = (item["raw_amount"] / total_market_amount) * 100

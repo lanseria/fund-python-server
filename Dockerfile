@@ -39,7 +39,9 @@ COPY ./src ./src
 # --system 参数将依赖安装到系统 Python 环境中，适合在容器中使用
 # -i 参数指定 PyPI 镜像源
 RUN uv pip install --system --no-cache . -i https://pypi.tuna.tsinghua.edu.cn/simple
-
+# 示例 Dockerfile 片段
+RUN uv run playwright install chromium
+RUN uv run playwright install-deps
 
 # =========================================================================
 #  Stage 2: Final Image - 最终的生产镜像
