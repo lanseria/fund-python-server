@@ -15,19 +15,17 @@ logger = logging.getLogger(__name__)
 
 # 常量定义
 PAGE_SIZE = 100  # 接口限制最大每页数量
-# 因为用的是 Chromium 底层网络栈，不再惧怕 TLS 指纹，可以直接安全地使用 https
 BASE_URL = "https://push2.eastmoney.com/api/qt/clist/get" 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "https://quote.eastmoney.com/",
-    "cookie": "qgqp_b_id=e6660c6de2a51968f61ca14d61438d58; st_nvi=qrkUU_66vrOFG8OfYu1gP7d40; st_si=93618303324434; st_pvi=06557965413274; st_sp=2025-05-27%2009%3A48%3A41; st_inirUrl=https%3A%2F%2Fwww.google.com%2F; st_sn=1; st_psi=20260303095605485-111000300841-9171452687; st_asi=delete; nid18=0f38fc1a4d417dd2a32a0335f8de07eb; nid18_create_time=1772502965775; gviem=P76pqKNCHBZqy4ZKrP9AQ6e71; gviem_create_time=1772502965775",
+    "Referer": "https://quote.eastmoney.com/"
 }
 
-async def _fetch_page_raw(context, page: int) -> Tuple[List[Dict], int]:
+async def _fetch_page_raw(context, page: int, ut: str) -> Tuple[List[Dict], int]:
     """
-    获取单页原始数据 (使用 Playwright 的 APIRequestContext)
-    :return: (当前页的数据列表, 数据总数)
+    获取单页原始数据 (使用 Playwright 的 APIRequestContext，携带动态 ut)
     """
+    import time
     params = {
         "np": "1",
         "fltt": "1",
@@ -40,20 +38,19 @@ async def _fetch_page_raw(context, page: int) -> Tuple[List[Dict], int]:
         "pz": str(PAGE_SIZE),
         "po": "1",
         "dect": "1",
-        "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+        "ut": ut,  # <--- 使用拦截到的动态 ut
         "wbp2u": "|0|0|0|web",
-        "_": "1772456919762"
+        "_": str(int(time.time() * 1000))  # 动态生成当前时间戳
     }
 
     try:
-        # 调用真正的浏览器底层网络发送 API 请求 (不渲染 DOM 页面)
+        # 调用上下文底层的真实网络栈发请求，因为和刚才的访问同属一个 context，Cookie 会自动附带过去！
         response = await context.request.get(BASE_URL, params=params, headers=HEADERS, timeout=10000)
         text = await response.text()
 
         # JSONP 解析
         match = re.search(r'jQuery_callback\((.*)\)', text, re.DOTALL)
         if not match:
-            # 尝试直接解析 JSON
             try:
                 data = json.loads(text)
             except json.JSONDecodeError:
@@ -65,14 +62,14 @@ async def _fetch_page_raw(context, page: int) -> Tuple[List[Dict], int]:
                 data = json.loads(json_str)
             except json.JSONDecodeError:
                 logger.error(f"[EastMoney Page {page}] JSONP 解析失败")
-                return [], 0
+                return[], 0
 
         if "data" in data and data["data"]:
             total = data["data"].get("total", 0)
-            diff_list = data["data"].get("diff", [])
+            diff_list = data["data"].get("diff",[])
             return diff_list, total
         else:
-            return[], 0
+            return [], 0
 
     except Exception as e:
         logger.error(f"[EastMoney Page {page}] 请求失败: {e}")
@@ -80,21 +77,14 @@ async def _fetch_page_raw(context, page: int) -> Tuple[List[Dict], int]:
 
 
 def _process_item(item: Dict) -> SectorInfo:
-    """
-    将原始字典转换为 SectorInfo 对象
-    """
-    # 1. 提取原始数据
+    """将原始字典转换为 SectorInfo 对象"""
     name = str(item.get("f14", "未知板块"))
     
-    # 辅助函数：安全转换数字
     def clean_float(val):
-        if val is None or val == "-":
-            return 0.0
+        if val is None or val == "-": return 0.0
         if not isinstance(val, (int, float)):
-            try:
-                return float(val)
-            except (ValueError, TypeError):
-                return 0.0
+            try: return float(val)
+            except (ValueError, TypeError): return 0.0
         return float(val)
 
     raw_cap = item.get("f20", 0)
@@ -105,39 +95,60 @@ def _process_item(item: Dict) -> SectorInfo:
     turnover_val = clean_float(raw_turnover)
     change_val = clean_float(raw_change)
 
-    # 2. 格式化逻辑
-    market_cap_desc = f"{market_cap_val / 100000000:.2f} 亿"
-    turnover_desc = f"{turnover_val / 100:.2f}%"
-    change_desc = f"{change_val / 100:.2f}%"
-
     return SectorInfo(
         name=name,
         market_cap=market_cap_val,
-        market_cap_desc=market_cap_desc,
+        market_cap_desc=f"{market_cap_val / 100000000:.2f} 亿",
         turnover_rate=turnover_val,
-        turnover_rate_desc=turnover_desc,
+        turnover_rate_desc=f"{turnover_val / 100:.2f}%",
         change_percent=change_val,
-        change_percent_desc=change_desc
+        change_percent_desc=f"{change_val / 100:.2f}%"
     )
 
 
 async def fetch_eastmoney_sectors() -> Optional[List[SectorInfo]]:
     """
-    使用 Playwright 并发分页获取所有东方财富板块数据并合并
+    使用 Playwright 解决联动校验：先用无头浏览器访问网页获取自动生成的 cookie 并截获 ut，再请求 API
     """
     async with async_playwright() as p:
-        # 启动无头浏览器，共用底层 Chromium 网络模块
         browser = await p.chromium.launch(
             headless=True,
             args=["--disable-blink-features=AutomationControlled"]
         )
+        # 初始化一个上下文，所有由这个 context 产生的 page 和 request 共享同一个 cookie jar
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
 
-        # 1. 获取第一页数据和总数
+        # --- 第一步：开启真实页面，拦截动态 ut 并获取 Cookie ---
+        init_page = await context.new_page()
+        captured_ut = "fa5fd1943c7b386f172d6893dbfba10b"  # 默认备用值
+        
+        async def handle_request(request):
+            nonlocal captured_ut
+            # 监听所有包含目标接口的请求
+            if "push2.eastmoney.com/api/qt/clist/get" in request.url:
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(request.url)
+                qs = parse_qs(parsed.query)
+                if 'ut' in qs and qs['ut']:
+                    captured_ut = qs['ut'][0]
+
+        init_page.on("request", handle_request)
+
+        logger.info("正在访问东方财富主页，通过 JS 渲染初始化 Cookie 并截获动态 ut...")
+        try:
+            # 访问页面，让网页自动帮我们进行环境验证，并触发数据请求，从而被监听截获到 ut
+            await init_page.goto("https://quote.eastmoney.com/center/gridlist.html#hs_a_board", wait_until="networkidle", timeout=12000)
+        except Exception as e:
+            logger.warning(f"访问东方财富主页耗时较长或异常(通常能成功注入Cookie无需担心): {e}")
+
+        logger.info(f"成功截获动态生成的 ut 参数: {captured_ut}")
+        await init_page.close() # 关闭引导页，此时 context 已包含了正确的 Cookie
+
+        # --- 第二步：带着拿到的 context(带Cookie)和 ut 循环去请求真正的数据 ---
         logger.info("正在获取东方财富板块数据第一页...")
-        first_page_items, total_count = await _fetch_page_raw(context, 1)
+        first_page_items, total_count = await _fetch_page_raw(context, 1, captured_ut)
         
         if not first_page_items and total_count == 0:
             logger.warning("未能获取到东方财富板块数据")
@@ -145,28 +156,23 @@ async def fetch_eastmoney_sectors() -> Optional[List[SectorInfo]]:
             return[]
 
         all_raw_items = list(first_page_items)
-        
-        # 2. 计算剩余页数
         total_pages = math.ceil(total_count / PAGE_SIZE)
         logger.info(f"东方财富数据获取成功，共 {total_count} 条数据，需请求 {total_pages} 页")
 
         if total_pages > 1:
-            # 3. 并发获取剩余页面 (传入共享的上下文，浏览器内核会自动分配内部 TCP 连接池)
+            # 并发获取后续页面，上下文底层的 TCP 连接池会自动调度复用
             tasks =[]
             for page in range(2, total_pages + 1):
-                tasks.append(_fetch_page_raw(context, page))
+                tasks.append(_fetch_page_raw(context, page, captured_ut))
             
-            # 等待所有请求完成
             results = await asyncio.gather(*tasks)
             
-            # 合并结果
             for items, _ in results:
                 all_raw_items.extend(items)
 
-        # 完成所有抓取后关闭浏览器
         await browser.close()
 
-        # 4. 统一处理数据格式
+        # 处理数据
         logger.info(f"东方财富所有页面获取完成，开始处理 {len(all_raw_items)} 条记录")
         processed_sectors = []
         for item in all_raw_items:
