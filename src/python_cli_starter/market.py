@@ -15,10 +15,13 @@ logger = logging.getLogger(__name__)
 
 # 常量定义
 PAGE_SIZE = 100  # 接口限制最大每页数量
-BASE_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+BASE_URL = "http://push2.eastmoney.com/api/qt/clist/get"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Referer": "https://quote.eastmoney.com/"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "http://quote.eastmoney.com/",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Connection": "keep-alive"
 }
 
 async def _fetch_page_raw(client: httpx.AsyncClient, page: int) -> Tuple[List[Dict], int]:
