@@ -15,7 +15,8 @@
     "**/*.yaml",
     "**/*.yml",
     "**/*.sql",
-    "**/*.txt"
+    "**/*.txt",
+    "Dockerfile"
   ],
   "ignore": {
     "useGitignore": true,
