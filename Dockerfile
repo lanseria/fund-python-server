@@ -39,24 +39,36 @@ COPY ./src ./src
 # --system 参数将依赖安装到系统 Python 环境中，适合在容器中使用
 # -i 参数指定 PyPI 镜像源
 RUN uv pip install --system --no-cache . -i https://pypi.tuna.tsinghua.edu.cn/simple
-# 示例 Dockerfile 片段
-RUN uv run playwright install chromium
-RUN uv run playwright install-deps
 
 # =========================================================================
 #  Stage 2: Final Image - 最终的生产镜像
 # =========================================================================
 FROM docker.m.daocloud.io/python:3.12-slim-bookworm AS final
 
-# 设置与 builder 阶段相同的环境变量
+# 设置与 builder 阶段相同的环境变量，并指定 Playwright 浏览器缓存路径到全局目录
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai \
-    LANG=C.UTF-8
+    LANG=C.UTF-8 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# 从 builder 阶段复制已配置好的时区信息
+# 从 builder 阶段复制已配置好的时区信息和国内 apt 镜像源(加速最终阶段的 apt 安装)
 COPY --from=builder /etc/localtime /etc/localtime
 COPY --from=builder /usr/share/zoneinfo/${TZ} /usr/share/zoneinfo/${TZ}
+COPY --from=builder /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/debian.sources
+
+# 从 builder 阶段先复制已安装的所有 Python 依赖包和可执行文件
+# 这样在 final 阶段就能直接调用 playwright 命令了
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# 此时我们还是 root 用户。更新 apt 并安装 Playwright 所需的系统级依赖及 Chromium 内核
+# 安装完成后清理缓存，并将浏览器目录的权限赋予所有人读取/执行
+RUN apt-get update && \
+    playwright install chromium && \
+    playwright install-deps chromium && \
+    rm -rf /var/lib/apt/lists/* && \
+    chmod -R 755 /ms-playwright
 
 # 创建一个非 root 用户来运行应用，这是安全最佳实践
 # 避免在容器内使用 root 用户
@@ -65,12 +77,6 @@ USER appuser
 
 # 设置新的工作目录
 WORKDIR /home/appuser/app
-
-# 从 builder 阶段复制已安装的所有 Python 依赖包
-# 这是多阶段构建的核心，我们只拿需要的东西，不保留构建时的中间产物
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-# 复制由依赖安装的可执行文件 (如 uvicorn, cli)
-COPY --from=builder /usr/local/bin /usr/local/bin
 
 # 复制应用源代码，并确保文件所有者是我们的非 root 用户
 COPY --chown=appuser:appgroup ./src ./src
