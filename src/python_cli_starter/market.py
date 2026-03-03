@@ -21,6 +21,30 @@ HEADERS = {
     "Referer": "https://quote.eastmoney.com/"
 }
 
+def _parse_eastmoney_text(text: str, page: int) -> Tuple[List[Dict], int]:
+    """提取的通用解析逻辑"""
+    match = re.search(r'jQuery_callback\((.*)\)', text, re.DOTALL)
+    if not match:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            logger.error(f"[EastMoney Page {page}] 无法解析响应数据")
+            return[], 0
+    else:
+        json_str = match.group(1)
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError:
+            logger.error(f"[EastMoney Page {page}] JSONP 解析失败")
+            return[], 0
+
+    if "data" in data and data["data"]:
+        total = data["data"].get("total", 0)
+        diff_list = data["data"].get("diff",[])
+        return diff_list, total
+    else:
+        return[], 0
+
 async def _fetch_page_raw(context, page: int, ut: str) -> Tuple[List[Dict], int]:
     """
     获取单页原始数据 (使用 Playwright 的 APIRequestContext，携带动态 ut)
@@ -44,35 +68,45 @@ async def _fetch_page_raw(context, page: int, ut: str) -> Tuple[List[Dict], int]
     }
 
     try:
-        # 调用上下文底层的真实网络栈发请求，因为和刚才的访问同属一个 context，Cookie 会自动附带过去！
+        # 调用上下文底层的真实网络栈发请求
         response = await context.request.get(BASE_URL, params=params, headers=HEADERS, timeout=10000)
         text = await response.text()
-
-        # JSONP 解析
-        match = re.search(r'jQuery_callback\((.*)\)', text, re.DOTALL)
-        if not match:
-            try:
-                data = json.loads(text)
-            except json.JSONDecodeError:
-                logger.error(f"[EastMoney Page {page}] 无法解析响应数据")
-                return[], 0
-        else:
-            json_str = match.group(1)
-            try:
-                data = json.loads(json_str)
-            except json.JSONDecodeError:
-                logger.error(f"[EastMoney Page {page}] JSONP 解析失败")
-                return[], 0
-
-        if "data" in data and data["data"]:
-            total = data["data"].get("total", 0)
-            diff_list = data["data"].get("diff",[])
-            return diff_list, total
-        else:
-            return [], 0
-
+        return _parse_eastmoney_text(text, page)
     except Exception as e:
         logger.error(f"[EastMoney Page {page}] 请求失败: {e}")
+        return[], 0
+
+async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, ut: str, cookie: Optional[str] = None) -> Tuple[List[Dict], int]:
+    """
+    获取单页原始数据 (使用 httpx)
+    """
+    import time
+    params = {
+        "np": "1",
+        "fltt": "1",
+        "invt": "2",
+        "cb": "jQuery_callback",
+        "fs": "m:90+t:2+f:!50",
+        "fields": "f14,f20,f8,f3",
+        "fid": "f3",
+        "pn": str(page),
+        "pz": str(PAGE_SIZE),
+        "po": "1",
+        "dect": "1",
+        "ut": ut,
+        "wbp2u": "|0|0|0|web",
+        "_": str(int(time.time() * 1000))
+    }
+    headers = HEADERS.copy()
+    if cookie:
+        headers["Cookie"] = cookie
+
+    try:
+        response = await client.get(BASE_URL, params=params, headers=headers, timeout=10.0)
+        text = response.text
+        return _parse_eastmoney_text(text, page)
+    except Exception as e:
+        logger.error(f"[EastMoney Page {page}] HTTPX请求失败: {e}")
         return[], 0
 
 
@@ -106,83 +140,103 @@ def _process_item(item: Dict) -> SectorInfo:
     )
 
 
-async def fetch_eastmoney_sectors() -> Optional[List[SectorInfo]]:
+async def fetch_eastmoney_sectors(ut: Optional[str] = None, cookie: Optional[str] = None) -> Optional[List[SectorInfo]]:
     """
-    使用 Playwright 解决联动校验：先用无头浏览器访问网页获取自动生成的 cookie 并截获 ut，再请求 API
+    如果提供 ut，则直接通过 httpx 获取数据；
+    否则使用 Playwright 解决联动校验：先用无头浏览器访问网页获取自动生成的 cookie 并截获 ut，再请求 API
     """
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled"]
-        )
-        # 初始化一个上下文，所有由这个 context 产生的 page 和 request 共享同一个 cookie jar
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
+    all_raw_items =[]
 
-        # --- 第一步：开启真实页面，拦截动态 ut 并获取 Cookie ---
-        init_page = await context.new_page()
-        captured_ut = "fa5fd1943c7b386f172d6893dbfba10b"  # 默认备用值
-        
-        async def handle_request(request):
-            nonlocal captured_ut
-            # 监听所有包含目标接口的请求
-            if "push2.eastmoney.com/api/qt/clist/get" in request.url:
-                from urllib.parse import urlparse, parse_qs
-                parsed = urlparse(request.url)
-                qs = parse_qs(parsed.query)
-                if 'ut' in qs and qs['ut']:
-                    captured_ut = qs['ut'][0]
-
-        init_page.on("request", handle_request)
-
-        logger.info("正在访问东方财富主页，通过 JS 渲染初始化 Cookie 并截获动态 ut...")
-        try:
-            # 访问页面，让网页自动帮我们进行环境验证，并触发数据请求，从而被监听截获到 ut
-            await init_page.goto("https://quote.eastmoney.com/center/gridlist.html#hs_a_board", wait_until="networkidle", timeout=12000)
-        except Exception as e:
-            logger.warning(f"访问东方财富主页耗时较长或异常(通常能成功注入Cookie无需担心): {e}")
-
-        logger.info(f"成功截获动态生成的 ut 参数: {captured_ut}")
-        await init_page.close() # 关闭引导页，此时 context 已包含了正确的 Cookie
-
-        # --- 第二步：带着拿到的 context(带Cookie)和 ut 循环去请求真正的数据 ---
-        logger.info("正在获取东方财富板块数据第一页...")
-        first_page_items, total_count = await _fetch_page_raw(context, 1, captured_ut)
-        
-        if not first_page_items and total_count == 0:
-            logger.warning("未能获取到东方财富板块数据")
-            await browser.close()
-            return[]
-
-        all_raw_items = list(first_page_items)
-        total_pages = math.ceil(total_count / PAGE_SIZE)
-        logger.info(f"东方财富数据获取成功，共 {total_count} 条数据，需请求 {total_pages} 页")
-
-        if total_pages > 1:
-            # 并发获取后续页面，上下文底层的 TCP 连接池会自动调度复用
-            tasks =[]
-            for page in range(2, total_pages + 1):
-                tasks.append(_fetch_page_raw(context, page, captured_ut))
+    if ut:
+        logger.info(f"使用传入的 ut: {ut} 和 cookie 绕过 Playwright 直接请求")
+        async with httpx.AsyncClient() as client:
+            first_page_items, total_count = await _fetch_page_raw_httpx(client, 1, ut, cookie)
             
-            results = await asyncio.gather(*tasks)
-            
-            for items, _ in results:
-                all_raw_items.extend(items)
+            if not first_page_items and total_count == 0:
+                logger.warning("未能获取到东方财富板块数据 (HTTPX)")
+                return[]
 
-        await browser.close()
+            all_raw_items = list(first_page_items)
+            total_pages = math.ceil(total_count / PAGE_SIZE)
+            logger.info(f"东方财富数据获取成功，共 {total_count} 条数据，需请求 {total_pages} 页")
 
-        # 处理数据
-        logger.info(f"东方财富所有页面获取完成，开始处理 {len(all_raw_items)} 条记录")
-        processed_sectors = []
-        for item in all_raw_items:
-            try:
-                processed_sectors.append(_process_item(item))
-            except Exception as e:
-                logger.error(f"处理单条数据出错: {e}, item: {item}")
-                continue
+            if total_pages > 1:
+                tasks =[]
+                for page in range(2, total_pages + 1):
+                    tasks.append(_fetch_page_raw_httpx(client, page, ut, cookie))
                 
-        return processed_sectors
+                results = await asyncio.gather(*tasks)
+                
+                for items, _ in results:
+                    all_raw_items.extend(items)
+    else:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"]
+            )
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+
+            init_page = await context.new_page()
+            captured_ut = "fa5fd1943c7b386f172d6893dbfba10b"  # 默认备用值
+            
+            async def handle_request(request):
+                nonlocal captured_ut
+                if "push2.eastmoney.com/api/qt/clist/get" in request.url:
+                    from urllib.parse import urlparse, parse_qs
+                    parsed = urlparse(request.url)
+                    qs = parse_qs(parsed.query)
+                    if 'ut' in qs and qs['ut']:
+                        captured_ut = qs['ut'][0]
+
+            init_page.on("request", handle_request)
+
+            logger.info("正在访问东方财富主页，通过 JS 渲染初始化 Cookie 并截获动态 ut...")
+            try:
+                await init_page.goto("https://quote.eastmoney.com/center/gridlist.html#industry_board", wait_until="networkidle", timeout=12000)
+            except Exception as e:
+                logger.warning(f"访问东方财富主页耗时较长或异常(通常能成功注入Cookie无需担心): {e}")
+
+            logger.info(f"成功截获动态生成的 ut 参数: {captured_ut}")
+            await init_page.close()
+
+            logger.info("正在获取东方财富板块数据第一页...")
+            first_page_items, total_count = await _fetch_page_raw(context, 1, captured_ut)
+            
+            if not first_page_items and total_count == 0:
+                logger.warning("未能获取到东方财富板块数据")
+                await browser.close()
+                return[]
+
+            all_raw_items = list(first_page_items)
+            total_pages = math.ceil(total_count / PAGE_SIZE)
+            logger.info(f"东方财富数据获取成功，共 {total_count} 条数据，需请求 {total_pages} 页")
+
+            if total_pages > 1:
+                tasks =[]
+                for page in range(2, total_pages + 1):
+                    tasks.append(_fetch_page_raw(context, page, captured_ut))
+                
+                results = await asyncio.gather(*tasks)
+                
+                for items, _ in results:
+                    all_raw_items.extend(items)
+
+            await browser.close()
+
+    # 处理数据
+    logger.info(f"东方财富所有页面获取完成，开始处理 {len(all_raw_items)} 条记录")
+    processed_sectors =[]
+    for item in all_raw_items:
+        try:
+            processed_sectors.append(_process_item(item))
+        except Exception as e:
+            logger.error(f"处理单条数据出错: {e}, item: {item}")
+            continue
+            
+    return processed_sectors
     
 # --- 同花顺数据处理逻辑 ---
 

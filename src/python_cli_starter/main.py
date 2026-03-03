@@ -1,5 +1,6 @@
 # src/python_cli_starter/main.py
 from fastapi import FastAPI, HTTPException, Query, status
+from fastapi.responses import HTMLResponse
 import inspect
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -123,6 +124,188 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title='基金策略分析 API', lifespan=lifespan)
+
+# --- 前端展示页面 HTML ---
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>板块数据监控中心</title>
+    <!-- 引入 Vue 3 和 Tailwind CSS -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        [v-cloak] { display: none; }
+        .text-red { color: #ef4444; }   /* A股习惯：红涨 */
+        .text-green { color: #22c55e; } /* A股习惯：绿跌 */
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 md:p-8">
+    <div id="app" v-cloak class="max-w-7xl mx-auto bg-white rounded-xl shadow-lg overflow-hidden">
+        <!-- 页面头部 -->
+        <div class="bg-blue-600 p-6 text-white flex justify-between items-center">
+            <h1 class="text-2xl font-bold">板块数据监控中心</h1>
+            <div class="text-sm opacity-80">自动拉取最新市场数据</div>
+        </div>
+
+        <!-- 操作区：Tab切换 与 搜索 -->
+        <div class="p-6 border-b border-gray-200 flex flex-col sm:flex-row justify-between items-center space-y-4 sm:space-y-0">
+            <div class="flex space-x-1 bg-gray-100 p-1 rounded-lg">
+                <button @click="activeTab = 'eastmoney'" 
+                        :class="activeTab === 'eastmoney' ? 'bg-white shadow text-blue-600' : 'text-gray-600 hover:text-gray-800'"
+                        class="px-6 py-2 rounded-md text-sm font-medium transition-all duration-200">
+                    东方财富板块
+                </button>
+                <button @click="activeTab = 'ths'" 
+                        :class="activeTab === 'ths' ? 'bg-white shadow text-blue-600' : 'text-gray-600 hover:text-gray-800'"
+                        class="px-6 py-2 rounded-md text-sm font-medium transition-all duration-200">
+                    同花顺板块
+                </button>
+            </div>
+            
+            <div class="relative w-full sm:w-72">
+                <input v-model="searchQuery" type="text" placeholder="搜索板块名称..." 
+                       class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                <svg class="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                </svg>
+            </div>
+        </div>
+
+        <!-- 东方财富数据表格 -->
+        <div v-show="activeTab === 'eastmoney'" class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+                <thead>
+                    <tr class="bg-gray-50 text-gray-600 text-sm border-b">
+                        <th class="p-4 font-semibold whitespace-nowrap">板块名称</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">涨跌幅</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">总市值</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">换手率</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    <tr v-for="item in filteredEastMoney" :key="item.name" class="hover:bg-blue-50 transition-colors">
+                        <td class="p-4 text-gray-800 font-medium">{{ item.name }}</td>
+                        <td class="p-4 font-bold" :class="getColorClass(item.change_percent)">{{ item.change_percent_desc }}</td>
+                        <td class="p-4 text-gray-600">{{ item.market_cap_desc }}</td>
+                        <td class="p-4 text-gray-600">{{ item.turnover_rate_desc }}</td>
+                    </tr>
+                    <tr v-if="filteredEastMoney.length === 0">
+                        <td colspan="4" class="p-8 text-center text-gray-500">未找到匹配的板块数据</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 同花顺数据表格 -->
+        <div v-show="activeTab === 'ths'" class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+                <thead>
+                    <tr class="bg-gray-50 text-gray-600 text-sm border-b">
+                        <th class="p-4 font-semibold whitespace-nowrap">板块名称</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">涨跌幅</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">净流入(亿)</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">上涨家数</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">下跌家数</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">成交额占比</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    <tr v-for="item in filteredThs" :key="item.name" class="hover:bg-blue-50 transition-colors">
+                        <td class="p-4 text-gray-800 font-medium">{{ item.name }}</td>
+                        <td class="p-4 font-bold" :class="getColorClass(item.change_percent)">{{ item.change_percent }}%</td>
+                        <td class="p-4 font-bold" :class="getColorClass(item.net_inflow)">{{ item.net_inflow }}</td>
+                        <td class="p-4 text-red">{{ item.up_count }}</td>
+                        <td class="p-4 text-green">{{ item.down_count }}</td>
+                        <td class="p-4 text-gray-600">{{ item.turnover_ratio }}%</td>
+                    </tr>
+                    <tr v-if="filteredThs.length === 0">
+                        <td colspan="6" class="p-8 text-center text-gray-500">未找到匹配的板块数据</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted } = Vue
+
+        createApp({
+            setup() {
+                const activeTab = ref('eastmoney')
+                const searchQuery = ref('')
+                const eastMoneyData = ref([])
+                const thsData = ref([])
+
+                const fetchEastMoney = async () => {
+                    try {
+                        const res = await fetch('/market/df_sectors')
+                        const data = await res.json()
+                        eastMoneyData.value = data.sectors ||[]
+                    } catch (e) {
+                        console.error('获取东方财富数据失败:', e)
+                    }
+                }
+
+                const fetchThs = async () => {
+                    try {
+                        const res = await fetch('/market/ths_sectors')
+                        const data = await res.json()
+                        thsData.value = data.sectors ||[]
+                    } catch (e) {
+                        console.error('获取同花顺数据失败:', e)
+                    }
+                }
+
+                // 统一的红绿判断逻辑
+                const getColorClass = (val) => {
+                    if (val > 0) return 'text-red'
+                    if (val < 0) return 'text-green'
+                    return 'text-gray-500'
+                }
+
+                onMounted(() => {
+                    fetchEastMoney()
+                    fetchThs()
+                })
+
+                const filteredEastMoney = computed(() => {
+                    if (!searchQuery.value) return eastMoneyData.value
+                    const query = searchQuery.value.toLowerCase()
+                    return eastMoneyData.value.filter(item => item.name.toLowerCase().includes(query))
+                })
+
+                const filteredThs = computed(() => {
+                    if (!searchQuery.value) return thsData.value
+                    const query = searchQuery.value.toLowerCase()
+                    return thsData.value.filter(item => item.name.toLowerCase().includes(query))
+                })
+
+                return {
+                    activeTab,
+                    searchQuery,
+                    filteredEastMoney,
+                    filteredThs,
+                    getColorClass
+                }
+            }
+        }).mount('#app')
+    </script>
+</body>
+</html>
+"""
+
+@app.get(
+    '/',
+    response_class=HTMLResponse,
+    summary='板块监控前端面板',
+    tags=['Dashboard']
+)
+async def dashboard():
+    """返回内置的数据监控静态 HTML 页面"""
+    return DASHBOARD_HTML
 
 
 @app.get(
@@ -318,3 +501,37 @@ async def get_sector_names():
         "东方财富": [s.name for s in em_sectors],
         "同花顺":[s.name for s in ths_sectors]
     }
+
+@app.post(
+    '/market/fetch/eastmoney',
+    response_model=schemas.EastMoneyFetchResponse,
+    summary='手动触发获取东方财富板块数据',
+    tags=['Market']
+)
+async def trigger_fetch_eastmoney(request: schemas.EastMoneyFetchRequest):
+    """
+    手动触发爬取东方财富板块数据并保存到数据库。
+    可以传入 ut 和 cookie 来绕过 Playwright，提升速度并防止被反爬拦截。
+    """
+    logger.info(f"手动触发获取东方财富数据: ut={request.ut}, cookie_provided={bool(request.cookie)}")
+    try:
+        sectors = await market.fetch_eastmoney_sectors(ut=request.ut, cookie=request.cookie)
+        if sectors:
+            await save_eastmoney_sectors(sectors)
+            return schemas.EastMoneyFetchResponse(
+                success=True,
+                message="获取并保存成功",
+                count=len(sectors)
+            )
+        else:
+            return schemas.EastMoneyFetchResponse(
+                success=False,
+                message="获取成功但没有数据，可能被封禁或非交易时间",
+                count=0
+            )
+    except Exception as e:
+        logger.error(f"手动触发获取东方财富数据异常: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"抓取异常: {str(e)}"
+        )

@@ -1,6 +1,6 @@
 # src/python_cli_starter/schemas.py
 from pydantic import BaseModel, ConfigDict
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import date
 from enum import Enum
 
@@ -90,3 +90,14 @@ class ThsSectorListResponse(BaseModel):
     """同花顺板块列表响应"""
     count: int
     sectors: list[ThsSectorInfo]
+
+class EastMoneyFetchRequest(BaseModel):
+    """触发获取东方财富板块数据的请求参数"""
+    ut: Optional[str] = None
+    cookie: Optional[str] = None
+
+class EastMoneyFetchResponse(BaseModel):
+    """触发获取响应"""
+    success: bool
+    message: str
+    count: int
