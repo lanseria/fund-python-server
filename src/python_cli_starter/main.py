@@ -516,10 +516,11 @@ async def trigger_fetch_eastmoney(request: schemas.EastMoneyFetchRequest):
     """
     手动触发爬取东方财富板块数据并保存到数据库。
     可以传入 ut 和 cookie 来绕过 Playwright，提升速度并防止被反爬拦截。
+    fs_type: 2=行业板块(默认), 3=概念板块
     """
-    logger.info(f"手动触发获取东方财富数据: ut={request.ut}, cookie_provided={bool(request.cookie)}")
+    logger.info(f"手动触发获取东方财富数据: ut={request.ut}, cookie_provided={bool(request.cookie)}, fs_type={request.fs_type}")
     try:
-        sectors = await market.fetch_eastmoney_sectors(ut=request.ut, cookie=request.cookie)
+        sectors = await market.fetch_eastmoney_sectors(ut=request.ut, cookie=request.cookie, fs_type=request.fs_type)
         if sectors:
             await save_eastmoney_sectors(sectors)
             return schemas.EastMoneyFetchResponse(

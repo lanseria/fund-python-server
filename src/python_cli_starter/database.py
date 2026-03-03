@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from sqlalchemy.orm import declarative_base, Mapped, mapped_column
 from sqlalchemy import String, Float, Integer, Date, DateTime, UniqueConstraint
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -61,7 +61,15 @@ async def init_db():
     """初始化操作：不存在则自动创建 schema 与表"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("数据库及表结构初始化完成 (已具备时自动跳过)")
+        
+        # 兼容旧表结构：向 information_schema 查询 amount 列是否存在，如果不存在则自动追加
+        check_col_sql = text("SELECT column_name FROM information_schema.columns WHERE table_name='eastmoney_sectors' AND column_name='amount';")
+        result = await conn.execute(check_col_sql)
+        if not result.scalar():
+            await conn.execute(text("ALTER TABLE eastmoney_sectors ADD COLUMN amount FLOAT NOT NULL DEFAULT 0.0;"))
+            await conn.execute(text("ALTER TABLE eastmoney_sectors ADD COLUMN amount_desc VARCHAR NOT NULL DEFAULT '';"))
+            
+    logger.info("数据库及表结构初始化完成 (已具备时自动跳过，缺失的列已自动追加)")
 
 async def save_eastmoney_sectors(sectors):
     if not sectors: # 判空跳过

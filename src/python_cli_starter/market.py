@@ -45,7 +45,7 @@ def _parse_eastmoney_text(text: str, page: int) -> Tuple[List[Dict], int]:
     else:
         return[], 0
 
-async def _fetch_page_raw(context, page: int, ut: str) -> Tuple[List[Dict], int]:
+async def _fetch_page_raw(context, page: int, ut: str, fs_type: int) -> Tuple[List[Dict], int]:
     """
     获取单页原始数据 (使用 Playwright 的 APIRequestContext，携带动态 ut)
     """
@@ -55,7 +55,7 @@ async def _fetch_page_raw(context, page: int, ut: str) -> Tuple[List[Dict], int]
         "fltt": "1",
         "invt": "2",
         "cb": "jQuery_callback",
-        "fs": "m:90+t:2+f:!50",
+        "fs": f"m:90+t:{fs_type}+f:!50",
         "fields": "f14,f20,f8,f3,f6",  # f14:名称, f20:市值, f8:换手率, f3:涨跌幅, f6:成交额
         "fid": "f3",
         "pn": str(page),
@@ -76,7 +76,7 @@ async def _fetch_page_raw(context, page: int, ut: str) -> Tuple[List[Dict], int]
         logger.error(f"[EastMoney Page {page}] 请求失败: {e}")
         return[], 0
 
-async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, ut: str, cookie: Optional[str] = None) -> Tuple[List[Dict], int]:
+async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, ut: str, fs_type: int, cookie: Optional[str] = None) -> Tuple[List[Dict], int]:
     """
     获取单页原始数据 (使用 httpx)
     """
@@ -86,7 +86,7 @@ async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, ut: str, c
         "fltt": "1",
         "invt": "2",
         "cb": "jQuery_callback",
-        "fs": "m:90+t:2+f:!50",
+        "fs": f"m:90+t:{fs_type}+f:!50",
         "fields": "f14,f20,f8,f3,f6",
         "fid": "f3",
         "pn": str(page),
@@ -144,17 +144,18 @@ def _process_item(item: Dict) -> SectorInfo:
     )
 
 
-async def fetch_eastmoney_sectors(ut: Optional[str] = None, cookie: Optional[str] = None) -> Optional[List[SectorInfo]]:
+async def fetch_eastmoney_sectors(ut: Optional[str] = None, cookie: Optional[str] = None, fs_type: int = 2) -> Optional[List[SectorInfo]]:
     """
     如果提供 ut，则直接通过 httpx 获取数据；
-    否则使用 Playwright 解决联动校验：先用无头浏览器访问网页获取自动生成的 cookie 并截获 ut，再请求 API
+    否则使用 Playwright 解决联动校验：先用无头浏览器访问网页获取自动生成的 cookie 并截获 ut，再请求 API。
+    :param fs_type: 板块类型，2=行业板块，3=概念板块
     """
     all_raw_items =[]
 
     if ut:
-        logger.info(f"使用传入的 ut: {ut} 和 cookie 绕过 Playwright 直接请求")
+        logger.info(f"使用传入的 ut: {ut}, cookie 和 fs_type: {fs_type} 绕过 Playwright 直接请求")
         async with httpx.AsyncClient() as client:
-            first_page_items, total_count = await _fetch_page_raw_httpx(client, 1, ut, cookie)
+            first_page_items, total_count = await _fetch_page_raw_httpx(client, 1, ut, fs_type, cookie)
             
             if not first_page_items and total_count == 0:
                 logger.warning("未能获取到东方财富板块数据 (HTTPX)")
@@ -167,7 +168,7 @@ async def fetch_eastmoney_sectors(ut: Optional[str] = None, cookie: Optional[str
             if total_pages > 1:
                 tasks =[]
                 for page in range(2, total_pages + 1):
-                    tasks.append(_fetch_page_raw_httpx(client, page, ut, cookie))
+                    tasks.append(_fetch_page_raw_httpx(client, page, ut, fs_type, cookie))
                 
                 results = await asyncio.gather(*tasks)
                 
@@ -206,8 +207,8 @@ async def fetch_eastmoney_sectors(ut: Optional[str] = None, cookie: Optional[str
             logger.info(f"成功截获动态生成的 ut 参数: {captured_ut}")
             await init_page.close()
 
-            logger.info("正在获取东方财富板块数据第一页...")
-            first_page_items, total_count = await _fetch_page_raw(context, 1, captured_ut)
+            logger.info(f"正在获取东方财富板块数据第一页 (fs_type={fs_type})...")
+            first_page_items, total_count = await _fetch_page_raw(context, 1, captured_ut, fs_type)
             
             if not first_page_items and total_count == 0:
                 logger.warning("未能获取到东方财富板块数据")
@@ -221,7 +222,7 @@ async def fetch_eastmoney_sectors(ut: Optional[str] = None, cookie: Optional[str
             if total_pages > 1:
                 tasks =[]
                 for page in range(2, total_pages + 1):
-                    tasks.append(_fetch_page_raw(context, page, captured_ut))
+                    tasks.append(_fetch_page_raw(context, page, captured_ut, fs_type))
                 
                 results = await asyncio.gather(*tasks)
                 
