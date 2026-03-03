@@ -15,18 +15,17 @@ logger = logging.getLogger(__name__)
 
 # 常量定义
 PAGE_SIZE = 100  # 接口限制最大每页数量
-BASE_URL = "http://push2.eastmoney.com/api/qt/clist/get"
+# 因为用的是 Chromium 底层网络栈，不再惧怕 TLS 指纹，可以直接安全地使用 https
+BASE_URL = "https://push2.eastmoney.com/api/qt/clist/get" 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "http://quote.eastmoney.com/",
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "Accept-Language": "zh-CN,zh;q=0.9",
-    "Connection": "keep-alive"
+    "Referer": "https://quote.eastmoney.com/",
+    "cookie": "qgqp_b_id=e6660c6de2a51968f61ca14d61438d58; st_nvi=qrkUU_66vrOFG8OfYu1gP7d40; st_si=93618303324434; st_pvi=06557965413274; st_sp=2025-05-27%2009%3A48%3A41; st_inirUrl=https%3A%2F%2Fwww.google.com%2F; st_sn=1; st_psi=20260303095605485-111000300841-9171452687; st_asi=delete; nid18=0f38fc1a4d417dd2a32a0335f8de07eb; nid18_create_time=1772502965775; gviem=P76pqKNCHBZqy4ZKrP9AQ6e71; gviem_create_time=1772502965775",
 }
 
-async def _fetch_page_raw(client: httpx.AsyncClient, page: int) -> Tuple[List[Dict], int]:
+async def _fetch_page_raw(context, page: int) -> Tuple[List[Dict], int]:
     """
-    获取单页原始数据
+    获取单页原始数据 (使用 Playwright 的 APIRequestContext)
     :return: (当前页的数据列表, 数据总数)
     """
     params = {
@@ -47,25 +46,25 @@ async def _fetch_page_raw(client: httpx.AsyncClient, page: int) -> Tuple[List[Di
     }
 
     try:
-        response = await client.get(BASE_URL, params=params, headers=HEADERS, timeout=10.0)
-        response.raise_for_status()
-        text = response.text
+        # 调用真正的浏览器底层网络发送 API 请求 (不渲染 DOM 页面)
+        response = await context.request.get(BASE_URL, params=params, headers=HEADERS, timeout=10000)
+        text = await response.text()
 
         # JSONP 解析
         match = re.search(r'jQuery_callback\((.*)\)', text, re.DOTALL)
         if not match:
             # 尝试直接解析 JSON
             try:
-                data = response.json()
+                data = json.loads(text)
             except json.JSONDecodeError:
-                logger.error(f"[Page {page}] 无法解析响应数据")
-                return [], 0
+                logger.error(f"[EastMoney Page {page}] 无法解析响应数据")
+                return[], 0
         else:
             json_str = match.group(1)
             try:
                 data = json.loads(json_str)
             except json.JSONDecodeError:
-                logger.error(f"[Page {page}] JSONP 解析失败")
+                logger.error(f"[EastMoney Page {page}] JSONP 解析失败")
                 return [], 0
 
         if "data" in data and data["data"]:
@@ -73,11 +72,11 @@ async def _fetch_page_raw(client: httpx.AsyncClient, page: int) -> Tuple[List[Di
             diff_list = data["data"].get("diff", [])
             return diff_list, total
         else:
-            return [], 0
+            return[], 0
 
     except Exception as e:
-        logger.error(f"[Page {page}] 请求失败: {e}")
-        return [], 0
+        logger.error(f"[EastMoney Page {page}] 请求失败: {e}")
+        return[], 0
 
 
 def _process_item(item: Dict) -> SectorInfo:
@@ -107,13 +106,8 @@ def _process_item(item: Dict) -> SectorInfo:
     change_val = clean_float(raw_change)
 
     # 2. 格式化逻辑
-    # 市值：接口单位是元，转换为亿
     market_cap_desc = f"{market_cap_val / 100000000:.2f} 亿"
-
-    # 换手率：接口返回 100 表示 1%，所以 739 -> 7.39%
     turnover_desc = f"{turnover_val / 100:.2f}%"
-
-    # 涨跌幅：接口直接返回百分比数值，1.23 -> 1.23%
     change_desc = f"{change_val / 100:.2f}%"
 
     return SectorInfo(
@@ -129,28 +123,38 @@ def _process_item(item: Dict) -> SectorInfo:
 
 async def fetch_eastmoney_sectors() -> Optional[List[SectorInfo]]:
     """
-    分页获取所有东方财富板块数据并合并
+    使用 Playwright 并发分页获取所有东方财富板块数据并合并
     """
-    async with httpx.AsyncClient() as client:
+    async with async_playwright() as p:
+        # 启动无头浏览器，共用底层 Chromium 网络模块
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+
         # 1. 获取第一页数据和总数
-        logger.info("正在获取板块数据第一页...")
-        first_page_items, total_count = await _fetch_page_raw(client, 1)
+        logger.info("正在获取东方财富板块数据第一页...")
+        first_page_items, total_count = await _fetch_page_raw(context, 1)
         
         if not first_page_items and total_count == 0:
-            logger.warning("未能获取到板块数据")
-            return []
+            logger.warning("未能获取到东方财富板块数据")
+            await browser.close()
+            return[]
 
         all_raw_items = list(first_page_items)
         
         # 2. 计算剩余页数
         total_pages = math.ceil(total_count / PAGE_SIZE)
-        logger.info(f"获取成功，共 {total_count} 条数据，需请求 {total_pages} 页")
+        logger.info(f"东方财富数据获取成功，共 {total_count} 条数据，需请求 {total_pages} 页")
 
         if total_pages > 1:
-            # 3. 并发获取剩余页面
-            tasks = []
+            # 3. 并发获取剩余页面 (传入共享的上下文，浏览器内核会自动分配内部 TCP 连接池)
+            tasks =[]
             for page in range(2, total_pages + 1):
-                tasks.append(_fetch_page_raw(client, page))
+                tasks.append(_fetch_page_raw(context, page))
             
             # 等待所有请求完成
             results = await asyncio.gather(*tasks)
@@ -159,8 +163,11 @@ async def fetch_eastmoney_sectors() -> Optional[List[SectorInfo]]:
             for items, _ in results:
                 all_raw_items.extend(items)
 
+        # 完成所有抓取后关闭浏览器
+        await browser.close()
+
         # 4. 统一处理数据格式
-        logger.info(f"所有页面获取完成，开始处理 {len(all_raw_items)} 条记录")
+        logger.info(f"东方财富所有页面获取完成，开始处理 {len(all_raw_items)} 条记录")
         processed_sectors = []
         for item in all_raw_items:
             try:
