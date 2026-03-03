@@ -183,6 +183,7 @@ DASHBOARD_HTML = """
                         <th class="p-4 font-semibold whitespace-nowrap">涨跌幅</th>
                         <th class="p-4 font-semibold whitespace-nowrap">总市值</th>
                         <th class="p-4 font-semibold whitespace-nowrap">换手率</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">成交额</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100">
@@ -191,9 +192,10 @@ DASHBOARD_HTML = """
                         <td class="p-4 font-bold" :class="getColorClass(item.change_percent)">{{ item.change_percent_desc }}</td>
                         <td class="p-4 text-gray-600">{{ item.market_cap_desc }}</td>
                         <td class="p-4 text-gray-600">{{ item.turnover_rate_desc }}</td>
+                        <td class="p-4 text-gray-600">{{ item.amount_desc }}</td>
                     </tr>
                     <tr v-if="filteredEastMoney.length === 0">
-                        <td colspan="4" class="p-8 text-center text-gray-500">未找到匹配的板块数据</td>
+                        <td colspan="5" class="p-8 text-center text-gray-500">未找到匹配的板块数据</td>
                     </tr>
                 </tbody>
             </table>
@@ -449,7 +451,9 @@ async def get_df_sector_list():
                 turnover_rate=s.turnover_rate,
                 turnover_rate_desc=s.turnover_rate_desc,
                 change_percent=s.change_percent,
-                change_percent_desc=s.change_percent_desc
+                change_percent_desc=s.change_percent_desc,
+                amount=s.amount,
+                amount_desc=s.amount_desc
             ) for s in sectors
         ]
     )

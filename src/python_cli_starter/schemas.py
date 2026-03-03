@@ -72,6 +72,9 @@ class SectorInfo(BaseModel):
     change_percent: float     # f3 涨跌幅 (原始值)
     change_percent_desc: str  # 格式化后的涨跌幅 (例如: 1.25%)
 
+    amount: float             # f6 成交额 (原始值)
+    amount_desc: str          # 格式化后的成交额 (例如: 123.45 亿)
+
 class SectorListResponse(BaseModel):
     """板块列表响应"""
     count: int

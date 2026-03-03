@@ -38,6 +38,8 @@ class EastMoneySector(Base):
     turnover_rate_desc: Mapped[str] = mapped_column(String, nullable=False)
     change_percent: Mapped[float] = mapped_column(Float, nullable=False)
     change_percent_desc: Mapped[str] = mapped_column(String, nullable=False)
+    amount: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    amount_desc: Mapped[str] = mapped_column(String, nullable=False, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 # --- 同花顺板块表 ---
@@ -78,6 +80,8 @@ async def save_eastmoney_sectors(sectors):
                 turnover_rate_desc=sector.turnover_rate_desc,
                 change_percent=sector.change_percent,
                 change_percent_desc=sector.change_percent_desc,
+                amount=sector.amount,
+                amount_desc=sector.amount_desc,
                 updated_at=now
             )
             # 冲突时进行更新
@@ -90,6 +94,8 @@ async def save_eastmoney_sectors(sectors):
                     'turnover_rate_desc': stmt.excluded.turnover_rate_desc,
                     'change_percent': stmt.excluded.change_percent,
                     'change_percent_desc': stmt.excluded.change_percent_desc,
+                    'amount': stmt.excluded.amount,
+                    'amount_desc': stmt.excluded.amount_desc,
                     'updated_at': now
                 }
             )

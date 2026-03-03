@@ -56,7 +56,7 @@ async def _fetch_page_raw(context, page: int, ut: str) -> Tuple[List[Dict], int]
         "invt": "2",
         "cb": "jQuery_callback",
         "fs": "m:90+t:2+f:!50",
-        "fields": "f14,f20,f8,f3",  # f14:名称, f20:市值, f8:换手率, f3:涨跌幅
+        "fields": "f14,f20,f8,f3,f6",  # f14:名称, f20:市值, f8:换手率, f3:涨跌幅, f6:成交额
         "fid": "f3",
         "pn": str(page),
         "pz": str(PAGE_SIZE),
@@ -87,7 +87,7 @@ async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, ut: str, c
         "invt": "2",
         "cb": "jQuery_callback",
         "fs": "m:90+t:2+f:!50",
-        "fields": "f14,f20,f8,f3",
+        "fields": "f14,f20,f8,f3,f6",
         "fid": "f3",
         "pn": str(page),
         "pz": str(PAGE_SIZE),
@@ -124,10 +124,12 @@ def _process_item(item: Dict) -> SectorInfo:
     raw_cap = item.get("f20", 0)
     raw_turnover = item.get("f8", 0)
     raw_change = item.get("f3", 0)
+    raw_amount = item.get("f6", 0)
 
     market_cap_val = clean_float(raw_cap)
     turnover_val = clean_float(raw_turnover)
     change_val = clean_float(raw_change)
+    amount_val = clean_float(raw_amount)
 
     return SectorInfo(
         name=name,
@@ -136,7 +138,9 @@ def _process_item(item: Dict) -> SectorInfo:
         turnover_rate=turnover_val,
         turnover_rate_desc=f"{turnover_val / 100:.2f}%",
         change_percent=change_val,
-        change_percent_desc=f"{change_val / 100:.2f}%"
+        change_percent_desc=f"{change_val / 100:.2f}%",
+        amount=amount_val,
+        amount_desc=f"{amount_val / 100000000:.2f} 亿"
     )
 
 
