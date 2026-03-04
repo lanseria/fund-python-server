@@ -105,3 +105,9 @@ class EastMoneyFetchResponse(BaseModel):
     success: bool
     message: str
     count: int
+
+class EastMoneyUploadResponse(BaseModel):
+    """上传数据的响应"""
+    success: bool
+    message: str
+    count: int

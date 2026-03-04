@@ -15,77 +15,43 @@ logger = logging.getLogger(__name__)
 
 # 常量定义
 PAGE_SIZE = 100  # 接口限制最大每页数量
-BASE_URL = "https://push2.eastmoney.com/api/qt/clist/get" 
+BASE_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "https://quote.eastmoney.com/"
+    "Referer": "https://quote.eastmoney.com/center/gridlist.html"
 }
 
 def _parse_eastmoney_text(text: str, page: int) -> Tuple[List[Dict], int]:
     """提取的通用解析逻辑"""
-    match = re.search(r'jQuery_callback\((.*)\)', text, re.DOTALL)
-    if not match:
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            logger.error(f"[EastMoney Page {page}] 无法解析响应数据")
-            return[], 0
-    else:
-        json_str = match.group(1)
+    start_idx = text.find('{')
+    end_idx = text.rfind('}')
+    if start_idx != -1 and end_idx != -1:
+        json_str = text[start_idx:end_idx+1]
         try:
             data = json.loads(json_str)
+            if "data" in data and data["data"]:
+                total = data["data"].get("total", 0)
+                diff_list = data["data"].get("diff",[])
+                return diff_list, total
+            else:
+                return[], 0
         except json.JSONDecodeError:
-            logger.error(f"[EastMoney Page {page}] JSONP 解析失败")
+            logger.error(f"[EastMoney Page {page}] JSON 解析失败")
             return[], 0
-
-    if "data" in data and data["data"]:
-        total = data["data"].get("total", 0)
-        diff_list = data["data"].get("diff",[])
-        return diff_list, total
-    else:
-        return[], 0
-
-async def _fetch_page_raw(context, page: int, ut: str, fs_type: int) -> Tuple[List[Dict], int]:
-    """
-    获取单页原始数据 (使用 Playwright 的 APIRequestContext，携带动态 ut)
-    """
-    import time
-    params = {
-        "np": "1",
-        "fltt": "1",
-        "invt": "2",
-        "cb": "jQuery_callback",
-        "fs": f"m:90+t:{fs_type}+f:!50",
-        "fields": "f14,f20,f8,f3,f6",  # f14:名称, f20:市值, f8:换手率, f3:涨跌幅, f6:成交额
-        "fid": "f3",
-        "pn": str(page),
-        "pz": str(PAGE_SIZE),
-        "po": "1",
-        "dect": "1",
-        "ut": ut,  # <--- 使用拦截到的动态 ut
-        "wbp2u": "|0|0|0|web",
-        "_": str(int(time.time() * 1000))  # 动态生成当前时间戳
-    }
-
-    try:
-        # 调用上下文底层的真实网络栈发请求
-        response = await context.request.get(BASE_URL, params=params, headers=HEADERS, timeout=10000)
-        text = await response.text()
-        return _parse_eastmoney_text(text, page)
-    except Exception as e:
-        logger.error(f"[EastMoney Page {page}] 请求失败: {e}")
-        return[], 0
+            
+    logger.error(f"[EastMoney Page {page}] 无法匹配 JSON 结构")
+    return[], 0
 
 async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, ut: str, fs_type: int, cookie: Optional[str] = None) -> Tuple[List[Dict], int]:
     """
-    获取单页原始数据 (使用 httpx)
+    获取单页原始数据 (统一使用 httpx)
     """
     import time
     params = {
         "np": "1",
         "fltt": "1",
         "invt": "2",
-        "cb": "jQuery_callback",
+        "cb": "jQuery371023459551565698888_1772588943345",
         "fs": f"m:90+t:{fs_type}+f:!50",
         "fields": "f14,f20,f8,f3,f6",
         "fid": "f3",
@@ -97,6 +63,7 @@ async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, ut: str, f
         "wbp2u": "|0|0|0|web",
         "_": str(int(time.time() * 1000))
     }
+    logger.info(f"params = {params}")
     headers = HEADERS.copy()
     if cookie:
         headers["Cookie"] = cookie
@@ -107,8 +74,7 @@ async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, ut: str, f
         return _parse_eastmoney_text(text, page)
     except Exception as e:
         logger.error(f"[EastMoney Page {page}] HTTPX请求失败: {e}")
-        return[], 0
-
+        return [], 0
 
 def _process_item(item: Dict) -> SectorInfo:
     """将原始字典转换为 SectorInfo 对象"""
@@ -143,38 +109,29 @@ def _process_item(item: Dict) -> SectorInfo:
         amount_desc=f"{amount_val / 100000000:.2f} 亿"
     )
 
+def parse_eastmoney_jsonp(text: str) -> List[SectorInfo]:
+    """解析东方财富的 JSONP 或 JSON 字符串并返回 SectorInfo 列表"""
+    raw_items, _ = _parse_eastmoney_text(text, 0)
+    processed =[]
+    for item in raw_items:
+        try:
+            processed.append(_process_item(item))
+        except Exception as e:
+            logger.error(f"处理单条数据出错: {e}, item: {item}")
+    return processed
 
 async def fetch_eastmoney_sectors(ut: Optional[str] = None, cookie: Optional[str] = None, fs_type: int = 2) -> Optional[List[SectorInfo]]:
     """
-    如果提供 ut，则直接通过 httpx 获取数据；
-    否则使用 Playwright 解决联动校验：先用无头浏览器访问网页获取自动生成的 cookie 并截获 ut，再请求 API。
+    获取东方财富板块数据：
+    如果未提供 ut，则先用无头浏览器短暂访问网页截获自动生成的 cookie 与 ut，
+    随后统一使用轻量级的 httpx 进行并发数据拉取。
     :param fs_type: 板块类型，2=行业板块，3=概念板块
     """
-    all_raw_items =[]
+    captured_ut = ut
+    cookie_str = cookie
 
-    if ut:
-        logger.info(f"使用传入的 ut: {ut}, cookie 和 fs_type: {fs_type} 绕过 Playwright 直接请求")
-        async with httpx.AsyncClient() as client:
-            first_page_items, total_count = await _fetch_page_raw_httpx(client, 1, ut, fs_type, cookie)
-            
-            if not first_page_items and total_count == 0:
-                logger.warning("未能获取到东方财富板块数据 (HTTPX)")
-                return[]
-
-            all_raw_items = list(first_page_items)
-            total_pages = math.ceil(total_count / PAGE_SIZE)
-            logger.info(f"东方财富数据获取成功，共 {total_count} 条数据，需请求 {total_pages} 页")
-
-            if total_pages > 1:
-                tasks =[]
-                for page in range(2, total_pages + 1):
-                    tasks.append(_fetch_page_raw_httpx(client, page, ut, fs_type, cookie))
-                
-                results = await asyncio.gather(*tasks)
-                
-                for items, _ in results:
-                    all_raw_items.extend(items)
-    else:
+    # 如果没有传入凭证，则使用 Playwright 截获
+    if not captured_ut:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
@@ -205,35 +162,43 @@ async def fetch_eastmoney_sectors(ut: Optional[str] = None, cookie: Optional[str
                 logger.warning(f"访问东方财富主页耗时较长或异常(通常能成功注入Cookie无需担心): {e}")
 
             logger.info(f"成功截获动态生成的 ut 参数: {captured_ut}")
-            await init_page.close()
-
-            logger.info(f"正在获取东方财富板块数据第一页 (fs_type={fs_type})...")
-            first_page_items, total_count = await _fetch_page_raw(context, 1, captured_ut, fs_type)
             
-            if not first_page_items and total_count == 0:
-                logger.warning("未能获取到东方财富板块数据")
-                await browser.close()
-                return[]
-
-            all_raw_items = list(first_page_items)
-            total_pages = math.ceil(total_count / PAGE_SIZE)
-            logger.info(f"东方财富数据获取成功，共 {total_count} 条数据，需请求 {total_pages} 页")
-
-            if total_pages > 1:
-                tasks =[]
-                for page in range(2, total_pages + 1):
-                    tasks.append(_fetch_page_raw(context, page, captured_ut, fs_type))
-                
-                results = await asyncio.gather(*tasks)
-                
-                for items, _ in results:
-                    all_raw_items.extend(items)
-
+            # 提取 Playwright 渲染后生成的完整 Cookie 字符串
+            playwright_cookies = await context.cookies()
+            cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in playwright_cookies])
+            
+            # 凭证获取完毕，立即关闭浏览器释放资源
             await browser.close()
+    else:
+        logger.info(f"使用传入的 ut: {ut}, cookie 和 fs_type: {fs_type} 绕过 Playwright 直接请求")
+
+    # 统一使用 httpx 拉取数据
+    all_raw_items = []
+    async with httpx.AsyncClient() as client:
+        logger.info(f"正在获取东方财富板块数据第一页 (fs_type={fs_type})...")
+        first_page_items, total_count = await _fetch_page_raw_httpx(client, 1, captured_ut, fs_type, cookie_str)
+        
+        if not first_page_items and total_count == 0:
+            logger.warning("未能获取到东方财富板块数据 (HTTPX)")
+            return []
+
+        all_raw_items = list(first_page_items)
+        total_pages = math.ceil(total_count / PAGE_SIZE)
+        logger.info(f"东方财富数据获取成功，共 {total_count} 条数据，需请求 {total_pages} 页")
+
+        if total_pages > 1:
+            tasks = []
+            for page in range(2, total_pages + 1):
+                tasks.append(_fetch_page_raw_httpx(client, page, captured_ut, fs_type, cookie_str))
+            
+            results = await asyncio.gather(*tasks)
+            
+            for items, _ in results:
+                all_raw_items.extend(items)
 
     # 处理数据
     logger.info(f"东方财富所有页面获取完成，开始处理 {len(all_raw_items)} 条记录")
-    processed_sectors =[]
+    processed_sectors = []
     for item in all_raw_items:
         try:
             processed_sectors.append(_process_item(item))
@@ -262,7 +227,7 @@ async def _fetch_ths_page(page: Page, page_num: int) -> List[Dict[str, Any]]:
         
         if "Nginx forbidden" in html_content or (response and response.status == 403):
             logger.error(f"[THS Page {page_num}] 请求被拦截 (403/Forbidden)")
-            return[]
+            return []
 
         soup = BeautifulSoup(html_content, "html.parser")
         table_rows = soup.select("tbody tr")
@@ -271,7 +236,7 @@ async def _fetch_ths_page(page: Page, page_num: int) -> List[Dict[str, Any]]:
         if not table_rows:
             table_rows = soup.select("tr")
             
-        raw_results =[]
+        raw_results = []
         for row in table_rows:
             cols = row.find_all("td")
             if len(cols) < 8:
@@ -352,7 +317,7 @@ async def fetch_ths_sectors() -> List[ThsSectorInfo]:
         page1 = await context.new_page()
         page2 = await context.new_page()
         
-        tasks =[
+        tasks = [
             _fetch_ths_page(page1, 1),
             _fetch_ths_page(page2, 2)
         ]
@@ -361,12 +326,12 @@ async def fetch_ths_sectors() -> List[ThsSectorInfo]:
         
         await browser.close()
         
-        all_raw_data =[]
+        all_raw_data = []
         for page_data in results:
             all_raw_data.extend(page_data)
         
         if not all_raw_data:
-            return[]
+            return []
 
         # 1. 计算所有板块的总成交额
         total_market_amount = sum(item["raw_amount"] for item in all_raw_data)
@@ -375,7 +340,7 @@ async def fetch_ths_sectors() -> List[ThsSectorInfo]:
         if total_market_amount == 0:
             total_market_amount = 1.0 
 
-        final_sectors =[]
+        final_sectors = []
         for item in all_raw_data:
             # 2. 计算占比: (板块成交额 / 总成交额) * 100
             ratio = (item["raw_amount"] / total_market_amount) * 100

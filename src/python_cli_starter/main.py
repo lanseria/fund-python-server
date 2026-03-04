@@ -1,5 +1,5 @@
 # src/python_cli_starter/main.py
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, Query, status, Request
 from fastapi.responses import HTMLResponse
 import inspect
 from typing import Optional
@@ -539,4 +539,43 @@ async def trigger_fetch_eastmoney(request: schemas.EastMoneyFetchRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"抓取异常: {str(e)}"
+        )
+
+@app.post(
+    '/market/upload/eastmoney',
+    response_model=schemas.EastMoneyUploadResponse,
+    summary='手动上传东方财富JSONP数据',
+    tags=['Market']
+)
+async def upload_eastmoney_data(request: Request):
+    """
+    接收纯文本格式的东方财富 JSONP 或 JSON 字符串，
+    无需 JSON 包裹，直接把原始文本放在请求体(Body)中发送即可。
+    解析其中的板块数据并插入/更新到数据库。支持分批次上传。
+    """
+    # 直接读取原始的 HTTP Body 请求体并解码为字符串
+    raw_bytes = await request.body()
+    raw_data = raw_bytes.decode('utf-8')
+    
+    logger.info(f"收到手动上传的东方财富纯文本数据，数据长度: {len(raw_data)}")
+    try:
+        sectors = market.parse_eastmoney_jsonp(raw_data)
+        if sectors:
+            await save_eastmoney_sectors(sectors)
+            return schemas.EastMoneyUploadResponse(
+                success=True,
+                message=f"成功解析并保存 {len(sectors)} 条数据",
+                count=len(sectors)
+            )
+        else:
+            return schemas.EastMoneyUploadResponse(
+                success=False,
+                message="未能从提供的数据中解析出有效内容",
+                count=0
+            )
+    except Exception as e:
+        logger.error(f"手动上传东方财富数据异常: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"数据处理异常: {str(e)}"
         )
