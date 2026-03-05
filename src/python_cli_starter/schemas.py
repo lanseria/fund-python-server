@@ -61,22 +61,24 @@ class RsiChartResponse(BaseModel):
 
 class SectorInfo(BaseModel):
     """板块简要信息"""
+    model_config = ConfigDict(from_attributes=True)
+
     name: str            # f14 板块名称
-    
+
     market_cap: float    # f20 总市值 (原始值)
     market_cap_desc: str # 格式化后的市值 (例如: 99186.73 亿)
-    
+
     turnover_rate: float      # f8 换手率 (原始值)
     turnover_rate_desc: str   # 格式化后的换手率 (例如: 0.16%)
-    
+
     change_percent: float     # f3 涨跌幅 (原始值)
     change_percent_desc: str  # 格式化后的涨跌幅 (例如: 1.25%)
 
     amount: float             # f6 成交额 (原始值)
     amount_desc: str          # 格式化后的成交额 (例如: 123.45 亿)
 
-    date: Optional[date] = None           # 记录日期
-    updated_at: Optional[datetime] = None # 更新时间
+    date: date                # 记录日期
+    updated_at: datetime      # 更新时间
 
 class SectorListResponse(BaseModel):
     """板块列表响应"""
@@ -85,6 +87,8 @@ class SectorListResponse(BaseModel):
 
 class ThsSectorInfo(BaseModel):
     """同花顺板块信息"""
+    model_config = ConfigDict(from_attributes=True)
+
     name: str             # 板块名称
     change_percent: float # 涨跌幅 (%)
     net_inflow: float     # 净流入 (亿元)
@@ -92,8 +96,8 @@ class ThsSectorInfo(BaseModel):
     down_count: int       # 下跌家数
     turnover_ratio: float # 成交额占比 (%)
 
-    date: Optional[date] = None           # 记录日期
-    updated_at: Optional[datetime] = None # 更新时间
+    date: date            # 记录日期
+    updated_at: datetime  # 更新时间
 
 class ThsSectorListResponse(BaseModel):
     """同花顺板块列表响应"""

@@ -436,24 +436,10 @@ async def get_df_sector_list():
     从数据库获取当日（最新可用）东方财富的行业板块数据。
     """
     sectors = await get_today_eastmoney_sectors()
-    
+
     return schemas.SectorListResponse(
         count=len(sectors),
-        sectors=[
-            schemas.SectorInfo(
-                name=s.name,
-                market_cap=s.market_cap,
-                market_cap_desc=s.market_cap_desc,
-                turnover_rate=s.turnover_rate,
-                turnover_rate_desc=s.turnover_rate_desc,
-                change_percent=s.change_percent,
-                change_percent_desc=s.change_percent_desc,
-                amount=s.amount,
-                amount_desc=s.amount_desc,
-                date=s.date,
-                updated_at=s.updated_at
-            ) for s in sectors
-        ]
+        sectors=[schemas.SectorInfo.model_validate(s) for s in sectors]
     )
 
 @app.get(
@@ -467,21 +453,10 @@ async def get_ths_sector_list():
     从数据库获取当日（最新可用）同花顺行业板块数据。
     """
     sectors = await get_today_ths_sectors()
-    
+
     return schemas.ThsSectorListResponse(
         count=len(sectors),
-        sectors=[
-            schemas.ThsSectorInfo(
-                name=s.name,
-                change_percent=s.change_percent,
-                net_inflow=s.net_inflow,
-                up_count=s.up_count,
-                down_count=s.down_count,
-                turnover_ratio=s.turnover_ratio,
-                date=s.date,
-                updated_at=s.updated_at
-            ) for s in sectors
-        ]
+        sectors=[schemas.ThsSectorInfo.model_validate(s) for s in sectors]
     )
 
 @app.get(
