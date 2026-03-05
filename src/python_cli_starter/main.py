@@ -14,7 +14,6 @@ from . import schemas
 from . import charts
 from . import market
 from .database import (
-    init_db, 
     save_eastmoney_sectors, 
     save_ths_sectors,
     get_today_eastmoney_sectors,
@@ -106,9 +105,6 @@ async def fetch_and_save_sectors_task():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info('策略分析 API 服务启动')
-    
-    # 初始化创建表结构
-    await init_db()
     
     # 设定定时任务：每 15 分钟执行一次
     scheduler.add_job(fetch_and_save_sectors_task, 'interval', minutes=15)
@@ -453,7 +449,9 @@ async def get_df_sector_list():
                 change_percent=s.change_percent,
                 change_percent_desc=s.change_percent_desc,
                 amount=s.amount,
-                amount_desc=s.amount_desc
+                amount_desc=s.amount_desc,
+                date=s.date,
+                updated_at=s.updated_at
             ) for s in sectors
         ]
     )
@@ -479,7 +477,9 @@ async def get_ths_sector_list():
                 net_inflow=s.net_inflow,
                 up_count=s.up_count,
                 down_count=s.down_count,
-                turnover_ratio=s.turnover_ratio
+                turnover_ratio=s.turnover_ratio,
+                date=s.date,
+                updated_at=s.updated_at
             ) for s in sectors
         ]
     )

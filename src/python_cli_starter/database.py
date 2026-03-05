@@ -40,7 +40,7 @@ class EastMoneySector(Base):
     change_percent_desc: Mapped[str] = mapped_column(String, nullable=False)
     amount: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     amount_desc: Mapped[str] = mapped_column(String, nullable=False, default="")
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, server_default=func.now())
 
 # --- 同花顺板块表 ---
 class ThsSector(Base):
@@ -55,21 +55,9 @@ class ThsSector(Base):
     up_count: Mapped[int] = mapped_column(Integer, nullable=False)
     down_count: Mapped[int] = mapped_column(Integer, nullable=False)
     turnover_ratio: Mapped[float] = mapped_column(Float, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, server_default=func.now())
 
-async def init_db():
-    """初始化操作：不存在则自动创建 schema 与表"""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        
-        # 兼容旧表结构：向 information_schema 查询 amount 列是否存在，如果不存在则自动追加
-        check_col_sql = text("SELECT column_name FROM information_schema.columns WHERE table_name='eastmoney_sectors' AND column_name='amount';")
-        result = await conn.execute(check_col_sql)
-        if not result.scalar():
-            await conn.execute(text("ALTER TABLE eastmoney_sectors ADD COLUMN amount FLOAT NOT NULL DEFAULT 0.0;"))
-            await conn.execute(text("ALTER TABLE eastmoney_sectors ADD COLUMN amount_desc VARCHAR NOT NULL DEFAULT '';"))
-            
-    logger.info("数据库及表结构初始化完成 (已具备时自动跳过，缺失的列已自动追加)")
+# （提示：数据库及表结构的初始化与修改，已由 Alembic 迁移工具全面接管，废弃原有的 init_db 函数）
 
 async def save_eastmoney_sectors(sectors):
     if not sectors: # 判空跳过

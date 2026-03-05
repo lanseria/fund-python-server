@@ -33,6 +33,12 @@ uv sync
 
 # 启动服务
 uvicorn src.python_cli_starter.main:app --reload
+
+uv run alembic revision --autogenerate -m "init"
+
+uv run alembic upgrade head
+
+uv run alembic downgrade -1
 ```
 
 服务启动后访问：`http://localhost:8000/docs`

@@ -1,7 +1,7 @@
 # src/python_cli_starter/schemas.py
 from pydantic import BaseModel, ConfigDict
 from typing import Dict, Any, Optional
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 
 
@@ -75,6 +75,9 @@ class SectorInfo(BaseModel):
     amount: float             # f6 成交额 (原始值)
     amount_desc: str          # 格式化后的成交额 (例如: 123.45 亿)
 
+    date: Optional[date] = None           # 记录日期
+    updated_at: Optional[datetime] = None # 更新时间
+
 class SectorListResponse(BaseModel):
     """板块列表响应"""
     count: int
@@ -88,6 +91,9 @@ class ThsSectorInfo(BaseModel):
     up_count: int         # 上涨家数
     down_count: int       # 下跌家数
     turnover_ratio: float # 成交额占比 (%)
+
+    date: Optional[date] = None           # 记录日期
+    updated_at: Optional[datetime] = None # 更新时间
 
 class ThsSectorListResponse(BaseModel):
     """同花顺板块列表响应"""

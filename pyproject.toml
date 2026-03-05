@@ -7,7 +7,7 @@ name = 'fund-strategies-api'
 version = '1.0.0'
 description = '基金策略分析 API 服务'
 readme = 'README.md'
-requires-python = '>=3.9'
+requires-python = '>=3.10'
 license = 'MIT'
 authors = [
   { name = 'lanseria', email = 'zhangchao564265135@hotmail.com' },
@@ -27,6 +27,7 @@ dependencies =[
   "asyncpg>=0.29.0",
   "apscheduler>=3.10.4",
   "python-dotenv>=1.0.0",
+  "alembic>=1.18.4",
 ]
 
 [project.optional-dependencies]
