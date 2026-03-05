@@ -1,6 +1,7 @@
 # src/python_cli_starter/main.py
 from fastapi import FastAPI, HTTPException, Query, status, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 import inspect
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -121,6 +122,39 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title='基金策略分析 API', lifespan=lifespan)
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """捕获 422 异常并打印等效的 curl 请求以便调试"""
+    # 1. 构造基础命令
+    command = f"curl -X {request.method} '{str(request.url)}'"
+    
+    # 2. 遍历并添加请求头 (忽略 host 和 content-length)
+    for name, value in request.headers.items():
+        if name.lower() not in ("host", "content-length"):
+            # 简单转义单引号防止 shell 解析错误
+            safe_value = value.replace("'", "'\\''")
+            command += f" -H '{name}: {safe_value}'"
+    
+    # 3. 尝试读取并添加请求体 (Body)
+    try:
+        body = await request.body()
+        if body:
+            body_str = body.decode('utf-8').replace("'", "'\\''")
+            command += f" -d '{body_str}'"
+    except Exception:
+        pass
+
+    # 4. 打印调试信息
+    logger.warning("参数验证失败 (422 Unprocessable Entity)！")
+    logger.warning(f"可用于本地调试的 curl 命令如下:\n{command}\n")
+    logger.warning(f"具体的验证错误原因: {exc.errors()}")
+    
+    # 5. 返回默认的 422 JSON 响应结构
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors()},
+    )
+
 # --- 前端展示页面 HTML ---
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -180,6 +214,8 @@ DASHBOARD_HTML = """
                         <th class="p-4 font-semibold whitespace-nowrap">总市值</th>
                         <th class="p-4 font-semibold whitespace-nowrap">换手率</th>
                         <th class="p-4 font-semibold whitespace-nowrap">成交额</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">日期</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">更新时间</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100">
@@ -189,9 +225,11 @@ DASHBOARD_HTML = """
                         <td class="p-4 text-gray-600">{{ item.market_cap_desc }}</td>
                         <td class="p-4 text-gray-600">{{ item.turnover_rate_desc }}</td>
                         <td class="p-4 text-gray-600">{{ item.amount_desc }}</td>
+                        <td class="p-4 text-gray-600">{{ item.date }}</td>
+                        <td class="p-4 text-gray-600">{{ item.updated_at }}</td>
                     </tr>
                     <tr v-if="filteredEastMoney.length === 0">
-                        <td colspan="5" class="p-8 text-center text-gray-500">未找到匹配的板块数据</td>
+                        <td colspan="7" class="p-8 text-center text-gray-500">未找到匹配的板块数据</td>
                     </tr>
                 </tbody>
             </table>
@@ -208,6 +246,8 @@ DASHBOARD_HTML = """
                         <th class="p-4 font-semibold whitespace-nowrap">上涨家数</th>
                         <th class="p-4 font-semibold whitespace-nowrap">下跌家数</th>
                         <th class="p-4 font-semibold whitespace-nowrap">成交额占比</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">日期</th>
+                        <th class="p-4 font-semibold whitespace-nowrap">更新时间</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100">
@@ -218,9 +258,11 @@ DASHBOARD_HTML = """
                         <td class="p-4 text-red">{{ item.up_count }}</td>
                         <td class="p-4 text-green">{{ item.down_count }}</td>
                         <td class="p-4 text-gray-600">{{ item.turnover_ratio }}%</td>
+                        <td class="p-4 text-gray-600">{{ item.date }}</td>
+                        <td class="p-4 text-gray-600">{{ item.updated_at }}</td>
                     </tr>
                     <tr v-if="filteredThs.length === 0">
-                        <td colspan="6" class="p-8 text-center text-gray-500">未找到匹配的板块数据</td>
+                        <td colspan="8" class="p-8 text-center text-gray-500">未找到匹配的板块数据</td>
                     </tr>
                 </tbody>
             </table>
@@ -490,12 +532,12 @@ async def get_sector_names():
 async def trigger_fetch_eastmoney(request: schemas.EastMoneyFetchRequest):
     """
     手动触发爬取东方财富板块数据并保存到数据库。
-    可以传入 ut 和 cookie 来绕过 Playwright，提升速度并防止被反爬拦截。
+    可以传入 cookie 来绕过 Playwright，提升速度并防止被反爬拦截。
     fs_type: 2=行业板块(默认), 3=概念板块
     """
-    logger.info(f"手动触发获取东方财富数据: ut={request.ut}, cookie_provided={bool(request.cookie)}, fs_type={request.fs_type}")
+    logger.info(f"手动触发获取东方财富数据: cookie_provided={bool(request.cookie)}, fs_type={request.fs_type}")
     try:
-        sectors = await market.fetch_eastmoney_sectors(ut=request.ut, cookie=request.cookie, fs_type=request.fs_type)
+        sectors = await market.fetch_eastmoney_sectors(cookie=request.cookie, fs_type=request.fs_type)
         if sectors:
             await save_eastmoney_sectors(sectors)
             return schemas.EastMoneyFetchResponse(
@@ -509,6 +551,18 @@ async def trigger_fetch_eastmoney(request: schemas.EastMoneyFetchRequest):
                 message="获取成功但没有数据，可能被封禁或非交易时间",
                 count=0
             )
+    except market.EastMoneyAPIException as e:
+        if e.status_code == 422:
+            logger.warning("东方财富真实接口返回 422，已拦截并返回 curl 供调试。")
+            # 不引发 HTTPException，而是直接返回 Schema 从而触发 200 状态码
+            return schemas.EastMoneyFetchResponse(
+                success=False,
+                message="【提醒】东方财富接口验证失败(422)！请复制下方的 curl 命令在终端进行调试查找原因。",
+                count=0,
+                curl_command=e.curl_cmd
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"第三方接口异常: HTTP {e.status_code}")
     except Exception as e:
         logger.error(f"手动触发获取东方财富数据异常: {e}")
         raise HTTPException(

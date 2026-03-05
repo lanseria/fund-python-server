@@ -13,6 +13,8 @@ from .schemas import SectorInfo, ThsSectorInfo
 
 logger = logging.getLogger(__name__)
 
+from datetime import datetime, date
+
 # 常量定义
 PAGE_SIZE = 100  # 接口限制最大每页数量
 BASE_URL = "https://push2.eastmoney.com/api/qt/clist/get"
@@ -20,6 +22,12 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": "https://quote.eastmoney.com/center/gridlist.html"
 }
+
+class EastMoneyAPIException(Exception):
+    """用于向外传递东方财富接口自身的异常信息"""
+    def __init__(self, status_code: int, curl_cmd: str):
+        self.status_code = status_code
+        self.curl_cmd = curl_cmd
 
 def _parse_eastmoney_text(text: str, page: int) -> Tuple[List[Dict], int]:
     """提取的通用解析逻辑"""
@@ -42,7 +50,7 @@ def _parse_eastmoney_text(text: str, page: int) -> Tuple[List[Dict], int]:
     logger.error(f"[EastMoney Page {page}] 无法匹配 JSON 结构")
     return[], 0
 
-async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, ut: str, fs_type: int, cookie: Optional[str] = None) -> Tuple[List[Dict], int]:
+async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, fs_type: int, cookie: Optional[str] = None) -> Tuple[List[Dict], int]:
     """
     获取单页原始数据 (统一使用 httpx)
     """
@@ -51,7 +59,7 @@ async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, ut: str, f
         "np": "1",
         "fltt": "1",
         "invt": "2",
-        "cb": "jQuery371023459551565698888_1772588943345",
+        "cb": f"jQuery371023459551565698888_{str(int(time.time() * 1000))}",
         "fs": f"m:90+t:{fs_type}+f:!50",
         "fields": "f14,f20,f8,f3,f6",
         "fid": "f3",
@@ -59,7 +67,6 @@ async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, ut: str, f
         "pz": str(PAGE_SIZE),
         "po": "1",
         "dect": "1",
-        "ut": ut,
         "wbp2u": "|0|0|0|web",
         "_": str(int(time.time() * 1000))
     }
@@ -70,8 +77,21 @@ async def _fetch_page_raw_httpx(client: httpx.AsyncClient, page: int, ut: str, f
 
     try:
         response = await client.get(BASE_URL, params=params, headers=headers, timeout=10.0)
+        
+        # 当请求目标真实接口出现 422 时，生成 curl 并通过自定义异常抛出
+        if response.status_code == 422:
+            req = response.request
+            curl_cmd = f"curl -X {req.method} '{req.url}'"
+            for k, v in req.headers.items():
+                if k.lower() not in ("host", "connection", "accept-encoding"):
+                    safe_v = v.replace("'", "'\\''")
+                    curl_cmd += f" -H '{k}: {safe_v}'"
+            raise EastMoneyAPIException(422, curl_cmd)
+            
         text = response.text
         return _parse_eastmoney_text(text, page)
+    except EastMoneyAPIException:
+        raise  # 将自定义异常继续往上抛
     except Exception as e:
         logger.error(f"[EastMoney Page {page}] HTTPX请求失败: {e}")
         return [], 0
@@ -97,6 +117,7 @@ def _process_item(item: Dict) -> SectorInfo:
     change_val = clean_float(raw_change)
     amount_val = clean_float(raw_amount)
 
+    now = datetime.now()
     return SectorInfo(
         name=name,
         market_cap=market_cap_val,
@@ -106,7 +127,9 @@ def _process_item(item: Dict) -> SectorInfo:
         change_percent=change_val,
         change_percent_desc=f"{change_val / 100:.2f}%",
         amount=amount_val,
-        amount_desc=f"{amount_val / 100000000:.2f} 亿"
+        amount_desc=f"{amount_val / 100000000:.2f} 亿",
+        date=now.date(),
+        updated_at=now
     )
 
 def parse_eastmoney_jsonp(text: str) -> List[SectorInfo]:
@@ -120,18 +143,17 @@ def parse_eastmoney_jsonp(text: str) -> List[SectorInfo]:
             logger.error(f"处理单条数据出错: {e}, item: {item}")
     return processed
 
-async def fetch_eastmoney_sectors(ut: Optional[str] = None, cookie: Optional[str] = None, fs_type: int = 2) -> Optional[List[SectorInfo]]:
+async def fetch_eastmoney_sectors(cookie: Optional[str] = None, fs_type: int = 2) -> Optional[List[SectorInfo]]:
     """
     获取东方财富板块数据：
-    如果未提供 ut，则先用无头浏览器短暂访问网页截获自动生成的 cookie 与 ut，
+    如果未提供 cookie，则先用无头浏览器短暂访问网页截获自动生成的 cookie，
     随后统一使用轻量级的 httpx 进行并发数据拉取。
     :param fs_type: 板块类型，2=行业板块，3=概念板块
     """
-    captured_ut = ut
     cookie_str = cookie
 
     # 如果没有传入凭证，则使用 Playwright 截获
-    if not captured_ut:
+    if not cookie_str:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
@@ -142,45 +164,32 @@ async def fetch_eastmoney_sectors(ut: Optional[str] = None, cookie: Optional[str
             )
 
             init_page = await context.new_page()
-            captured_ut = "fa5fd1943c7b386f172d6893dbfba10b"  # 默认备用值
-            
-            async def handle_request(request):
-                nonlocal captured_ut
-                if "push2.eastmoney.com/api/qt/clist/get" in request.url:
-                    from urllib.parse import urlparse, parse_qs
-                    parsed = urlparse(request.url)
-                    qs = parse_qs(parsed.query)
-                    if 'ut' in qs and qs['ut']:
-                        captured_ut = qs['ut'][0]
 
-            init_page.on("request", handle_request)
-
-            logger.info("正在访问东方财富主页，通过 JS 渲染初始化 Cookie 并截获动态 ut...")
+            logger.info("正在访问东方财富主页，通过 JS 渲染初始化 Cookie...")
             try:
                 await init_page.goto("https://quote.eastmoney.com/center/gridlist.html#industry_board", wait_until="networkidle", timeout=12000)
             except Exception as e:
                 logger.warning(f"访问东方财富主页耗时较长或异常(通常能成功注入Cookie无需担心): {e}")
 
-            logger.info(f"成功截获动态生成的 ut 参数: {captured_ut}")
-            
             # 提取 Playwright 渲染后生成的完整 Cookie 字符串
             playwright_cookies = await context.cookies()
             cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in playwright_cookies])
+            logger.info("成功获取动态生成的 Cookie")
             
             # 凭证获取完毕，立即关闭浏览器释放资源
             await browser.close()
     else:
-        logger.info(f"使用传入的 ut: {ut}, cookie 和 fs_type: {fs_type} 绕过 Playwright 直接请求")
+        logger.info(f"使用传入的 cookie 和 fs_type: {fs_type} 绕过 Playwright 直接请求")
 
     # 统一使用 httpx 拉取数据
-    all_raw_items = []
+    all_raw_items =[]
     async with httpx.AsyncClient() as client:
         logger.info(f"正在获取东方财富板块数据第一页 (fs_type={fs_type})...")
-        first_page_items, total_count = await _fetch_page_raw_httpx(client, 1, captured_ut, fs_type, cookie_str)
+        first_page_items, total_count = await _fetch_page_raw_httpx(client, 1, fs_type, cookie_str)
         
         if not first_page_items and total_count == 0:
             logger.warning("未能获取到东方财富板块数据 (HTTPX)")
-            return []
+            return[]
 
         all_raw_items = list(first_page_items)
         total_pages = math.ceil(total_count / PAGE_SIZE)
@@ -189,7 +198,7 @@ async def fetch_eastmoney_sectors(ut: Optional[str] = None, cookie: Optional[str
         if total_pages > 1:
             tasks = []
             for page in range(2, total_pages + 1):
-                tasks.append(_fetch_page_raw_httpx(client, page, captured_ut, fs_type, cookie_str))
+                tasks.append(_fetch_page_raw_httpx(client, page, fs_type, cookie_str))
             
             results = await asyncio.gather(*tasks)
             
@@ -341,17 +350,20 @@ async def fetch_ths_sectors() -> List[ThsSectorInfo]:
             total_market_amount = 1.0 
 
         final_sectors = []
+        now = datetime.now()
         for item in all_raw_data:
             # 2. 计算占比: (板块成交额 / 总成交额) * 100
             ratio = (item["raw_amount"] / total_market_amount) * 100
-            
+
             sector_info = ThsSectorInfo(
                 name=item["name"],
                 change_percent=item["change_percent"],
                 net_inflow=item["net_inflow"],
                 up_count=item["up_count"],
                 down_count=item["down_count"],
-                turnover_ratio=round(ratio, 2) # 保留两位小数
+                turnover_ratio=round(ratio, 2), # 保留两位小数
+                date=now.date(),
+                updated_at=now
             )
             final_sectors.append(sector_info)
             

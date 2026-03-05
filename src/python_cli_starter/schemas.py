@@ -106,7 +106,6 @@ class ThsSectorListResponse(BaseModel):
 
 class EastMoneyFetchRequest(BaseModel):
     """触发获取东方财富板块数据的请求参数"""
-    ut: Optional[str] = None
     cookie: Optional[str] = None
     fs_type: int = 2  # 默认为 2 (行业板块)，可传 3 (概念板块) 等
 
@@ -115,6 +114,7 @@ class EastMoneyFetchResponse(BaseModel):
     success: bool
     message: str
     count: int
+    curl_command: Optional[str] = None
 
 class EastMoneyUploadResponse(BaseModel):
     """上传数据的响应"""
