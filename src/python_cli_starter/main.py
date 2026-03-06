@@ -111,9 +111,9 @@ async def fetch_and_save_sectors_task():
 async def lifespan(app: FastAPI):
     logger.info("策略分析 API 服务启动")
 
-    # 设定定时任务：每天 12:00 和 14:30 各执行一次
     scheduler.add_job(fetch_and_save_sectors_task, "cron", hour=11, minute=30)
     scheduler.add_job(fetch_and_save_sectors_task, "cron", hour=14, minute=30)
+    scheduler.add_job(fetch_and_save_sectors_task, "cron", hour=16, minute=30)
     scheduler.start()
 
     # 服务启动时，不等待15分钟，立即执行一次数据爬取
