@@ -194,7 +194,7 @@ DASHBOARD_HTML = """
             </div>
         </div>
 
-        <!-- 一键获取区域 -->
+        <!-- 获取数据区域 -->
         <div class="p-4 bg-yellow-50 border-b border-yellow-200">
             <div class="flex flex-col md:flex-row gap-4 items-start md:items-center">
                 <div class="flex-1 w-full">
@@ -203,14 +203,21 @@ DASHBOARD_HTML = """
                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm">
                 </div>
                 <div class="flex flex-col gap-2">
-                    <button @click="fetchAllData"
+                    <label class="block text-sm font-medium text-gray-700 mb-1">选择东方财富板块类型</label>
+                    <select v-model="selectedFsType" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm">
+                        <option value="2">行业板块 (fs_type=2)</option>
+                        <option value="3">概念板块 (fs_type=3)</option>
+                    </select>
+                </div>
+                <div class="flex flex-col gap-2">
+                    <button @click="fetchData"
                             :disabled="isFetching"
                             class="bg-blue-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
                         <svg v-if="isFetching" class="animate-spin h-4 w-4" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        {{ isFetching ? '获取中...' : '一键获取全部' }}
+                        {{ isFetching ? '获取中...' : '获取板块 + 同花顺' }}
                     </button>
                     <div v-if="fetchStatus.length > 0" class="text-xs text-gray-600">
                         <div v-for="(step, idx) in fetchStatus" :key="idx"
@@ -321,6 +328,7 @@ DASHBOARD_HTML = """
                 const eastMoneyData = ref([])
                 const thsData = ref([])
                 const cookieInput = ref('')
+                const selectedFsType = ref('2')
                 const isFetching = ref(false)
                 const fetchStatus = ref([])
 
@@ -348,18 +356,23 @@ DASHBOARD_HTML = """
                     await Promise.all([fetchEastMoney(), fetchThs()])
                 }
 
-                const fetchAllData = async () => {
+                const getFsTypeName = () => {
+                    return selectedFsType.value === '2' ? '东方财富行业板块' : '东方财富概念板块'
+                }
+
+                const fetchData = async () => {
                     isFetching.value = true
                     fetchStatus.value = []
 
                     try {
-                        const res = await fetch('/market/fetch/batch', {
+                        const res = await fetch('/market/fetch/with-ths', {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json'
                             },
                             body: JSON.stringify({
-                                cookie: cookieInput.value || null
+                                cookie: cookieInput.value || null,
+                                fs_type: parseInt(selectedFsType.value)
                             })
                         })
 
@@ -371,7 +384,7 @@ DASHBOARD_HTML = """
                             await refreshData()
                         }
                     } catch (e) {
-                        console.error('批量获取失败:', e)
+                        console.error('获取失败:', e)
                         fetchStatus.value = [{
                             name: '请求失败',
                             success: false,
@@ -414,9 +427,10 @@ DASHBOARD_HTML = """
                     filteredThs,
                     getColorClass,
                     cookieInput,
+                    selectedFsType,
                     isFetching,
                     fetchStatus,
-                    fetchAllData,
+                    fetchData,
                     refreshData
                 }
             }
@@ -702,35 +716,35 @@ async def upload_eastmoney_data(request: Request):
 
 
 @app.post(
-    "/market/fetch/batch",
-    response_model=schemas.BatchFetchResponse,
-    summary="一键获取所有板块数据(东方财富行业+概念+同花顺)",
+    "/market/fetch/with-ths",
+    response_model=schemas.FetchWithThsResponse,
+    summary="获取东方财富板块 + 同花顺板块",
     tags=["Market"],
 )
-async def trigger_fetch_batch(request: schemas.BatchFetchRequest):
+async def trigger_fetch_with_ths(request: schemas.FetchWithThsRequest):
     """
-    一键获取所有板块数据，按顺序执行：
-    1. 东方财富行业板块 (fs_type=2)
-    2. 东方财富概念板块 (fs_type=3)
-    3. 同花顺板块
+    获取指定类型的东方财富板块 + 同花顺板块，按顺序执行：
+    1. 东方财富板块 (fs_type=2 或 3)
+    2. 同花顺板块
     全部完成后返回每一步的执行结果。
     """
-    logger.info(f"开始批量获取板块数据: cookie_provided={bool(request.cookie)}")
+    fs_type_name = "东方财富行业板块" if request.fs_type == 2 else "东方财富概念板块"
+    logger.info(f"开始获取 {fs_type_name} + 同花顺板块: cookie_provided={bool(request.cookie)}")
 
     steps = []
     all_success = True
 
-    # 步骤 1: 东方财富行业板块 (fs_type=2)
+    # 步骤 1: 东方财富板块
     try:
-        logger.info("步骤 1/3: 获取东方财富行业板块...")
+        logger.info(f"步骤 1/2: 获取 {fs_type_name}...")
         sectors = await market.fetch_eastmoney_sectors(
-            cookie=request.cookie, fs_type=2
+            cookie=request.cookie, fs_type=request.fs_type
         )
         count = len(sectors) if sectors else 0
         if sectors:
             await save_eastmoney_sectors(sectors)
-        steps.append(schemas.BatchFetchStepResult(
-            name="东方财富行业板块",
+        steps.append(schemas.FetchWithThsStepResult(
+            name=fs_type_name,
             success=count > 0,
             message=f"获取并保存 {count} 条数据" if count > 0 else "未获取到数据",
             count=count
@@ -739,25 +753,23 @@ async def trigger_fetch_batch(request: schemas.BatchFetchRequest):
             all_success = False
     except Exception as e:
         logger.error(f"步骤 1 异常: {e}")
-        steps.append(schemas.BatchFetchStepResult(
-            name="东方财富行业板块",
+        steps.append(schemas.FetchWithThsStepResult(
+            name=fs_type_name,
             success=False,
             message=f"异常: {str(e)}",
             count=0
         ))
         all_success = False
 
-    # 步骤 2: 东方财富概念板块 (fs_type=3)
+    # 步骤 2: 同花顺板块
     try:
-        logger.info("步骤 2/3: 获取东方财富概念板块...")
-        sectors = await market.fetch_eastmoney_sectors(
-            cookie=request.cookie, fs_type=3
-        )
+        logger.info("步骤 2/2: 获取同花顺板块...")
+        sectors = await market.fetch_ths_sectors()
         count = len(sectors) if sectors else 0
         if sectors:
-            await save_eastmoney_sectors(sectors)
-        steps.append(schemas.BatchFetchStepResult(
-            name="东方财富概念板块",
+            await save_ths_sectors(sectors)
+        steps.append(schemas.FetchWithThsStepResult(
+            name="同花顺板块",
             success=count > 0,
             message=f"获取并保存 {count} 条数据" if count > 0 else "未获取到数据",
             count=count
@@ -766,32 +778,7 @@ async def trigger_fetch_batch(request: schemas.BatchFetchRequest):
             all_success = False
     except Exception as e:
         logger.error(f"步骤 2 异常: {e}")
-        steps.append(schemas.BatchFetchStepResult(
-            name="东方财富概念板块",
-            success=False,
-            message=f"异常: {str(e)}",
-            count=0
-        ))
-        all_success = False
-
-    # 步骤 3: 同花顺板块
-    try:
-        logger.info("步骤 3/3: 获取同花顺板块...")
-        sectors = await market.fetch_ths_sectors()
-        count = len(sectors) if sectors else 0
-        if sectors:
-            await save_ths_sectors(sectors)
-        steps.append(schemas.BatchFetchStepResult(
-            name="同花顺板块",
-            success=count > 0,
-            message=f"获取并保存 {count} 条数据" if count > 0 else "未获取到数据",
-            count=count
-        ))
-        if count == 0:
-            all_success = False
-    except Exception as e:
-        logger.error(f"步骤 3 异常: {e}")
-        steps.append(schemas.BatchFetchStepResult(
+        steps.append(schemas.FetchWithThsStepResult(
             name="同花顺板块",
             success=False,
             message=f"异常: {str(e)}",
@@ -799,8 +786,8 @@ async def trigger_fetch_batch(request: schemas.BatchFetchRequest):
         ))
         all_success = False
 
-    return schemas.BatchFetchResponse(
+    return schemas.FetchWithThsResponse(
         success=all_success,
-        message="批量获取完成" if all_success else "部分任务失败",
+        message="获取完成" if all_success else "部分任务失败",
         steps=steps
     )

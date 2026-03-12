@@ -122,19 +122,20 @@ class EastMoneyUploadResponse(BaseModel):
     message: str
     count: int
 
-class BatchFetchRequest(BaseModel):
-    """批量获取板块数据的请求参数"""
+class FetchWithThsRequest(BaseModel):
+    """获取东方财富板块 + 同花顺的请求参数"""
     cookie: Optional[str] = None
+    fs_type: int = 2  # 2=行业板块, 3=概念板块
 
-class BatchFetchStepResult(BaseModel):
+class FetchWithThsStepResult(BaseModel):
     """单步执行结果"""
     name: str
     success: bool
     message: str
     count: int
 
-class BatchFetchResponse(BaseModel):
-    """批量获取响应"""
+class FetchWithThsResponse(BaseModel):
+    """获取响应"""
     success: bool
     message: str
-    steps: list[BatchFetchStepResult]
+    steps: list[FetchWithThsStepResult]
