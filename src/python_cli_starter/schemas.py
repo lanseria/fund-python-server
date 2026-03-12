@@ -121,3 +121,20 @@ class EastMoneyUploadResponse(BaseModel):
     success: bool
     message: str
     count: int
+
+class BatchFetchRequest(BaseModel):
+    """批量获取板块数据的请求参数"""
+    cookie: Optional[str] = None
+
+class BatchFetchStepResult(BaseModel):
+    """单步执行结果"""
+    name: str
+    success: bool
+    message: str
+    count: int
+
+class BatchFetchResponse(BaseModel):
+    """批量获取响应"""
+    success: bool
+    message: str
+    steps: list[BatchFetchStepResult]

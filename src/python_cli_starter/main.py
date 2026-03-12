@@ -182,28 +182,63 @@ DASHBOARD_HTML = """
 <body class="bg-gray-100 min-h-screen p-4 md:p-8">
     <div id="app" v-cloak class="max-w-7xl mx-auto bg-white rounded-xl shadow-lg overflow-hidden">
         <!-- 页面头部 -->
-        <div class="bg-blue-600 p-6 text-white flex justify-between items-center">
+        <div class="bg-blue-600 p-6 text-white flex flex-col md:flex-row md:justify-between md:items-center gap-4">
             <h1 class="text-2xl font-bold">板块数据监控中心</h1>
-            <div class="text-sm opacity-80">自动拉取最新市场数据</div>
+            <div class="flex items-center gap-4">
+                <div class="text-sm opacity-80">自动拉取最新市场数据</div>
+                <button @click="refreshData"
+                        :disabled="isFetching"
+                        class="bg-white text-blue-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-50 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                    刷新数据
+                </button>
+            </div>
+        </div>
+
+        <!-- 一键获取区域 -->
+        <div class="p-4 bg-yellow-50 border-b border-yellow-200">
+            <div class="flex flex-col md:flex-row gap-4 items-start md:items-center">
+                <div class="flex-1 w-full">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">东方财富 Cookie (可选)</label>
+                    <input v-model="cookieInput" type="text" placeholder="从浏览器复制东方财富的 Cookie 粘贴到这里..."
+                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm">
+                </div>
+                <div class="flex flex-col gap-2">
+                    <button @click="fetchAllData"
+                            :disabled="isFetching"
+                            class="bg-blue-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+                        <svg v-if="isFetching" class="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        {{ isFetching ? '获取中...' : '一键获取全部' }}
+                    </button>
+                    <div v-if="fetchStatus.length > 0" class="text-xs text-gray-600">
+                        <div v-for="(step, idx) in fetchStatus" :key="idx"
+                             :class="step.success ? 'text-green-600' : 'text-red-600'">
+                            {{ step.name }}: {{ step.message }}
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- 操作区：Tab切换 与 搜索 -->
         <div class="p-6 border-b border-gray-200 flex flex-col sm:flex-row justify-between items-center space-y-4 sm:space-y-0">
             <div class="flex space-x-1 bg-gray-100 p-1 rounded-lg">
-                <button @click="activeTab = 'eastmoney'" 
+                <button @click="activeTab = 'eastmoney'"
                         :class="activeTab === 'eastmoney' ? 'bg-white shadow text-blue-600' : 'text-gray-600 hover:text-gray-800'"
                         class="px-6 py-2 rounded-md text-sm font-medium transition-all duration-200">
                     东方财富板块
                 </button>
-                <button @click="activeTab = 'ths'" 
+                <button @click="activeTab = 'ths'"
                         :class="activeTab === 'ths' ? 'bg-white shadow text-blue-600' : 'text-gray-600 hover:text-gray-800'"
                         class="px-6 py-2 rounded-md text-sm font-medium transition-all duration-200">
                     同花顺板块
                 </button>
             </div>
-            
+
             <div class="relative w-full sm:w-72">
-                <input v-model="searchQuery" type="text" placeholder="搜索板块名称..." 
+                <input v-model="searchQuery" type="text" placeholder="搜索板块名称..."
                        class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                 <svg class="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
@@ -285,6 +320,9 @@ DASHBOARD_HTML = """
                 const searchQuery = ref('')
                 const eastMoneyData = ref([])
                 const thsData = ref([])
+                const cookieInput = ref('')
+                const isFetching = ref(false)
+                const fetchStatus = ref([])
 
                 const fetchEastMoney = async () => {
                     try {
@@ -303,6 +341,45 @@ DASHBOARD_HTML = """
                         thsData.value = data.sectors ||[]
                     } catch (e) {
                         console.error('获取同花顺数据失败:', e)
+                    }
+                }
+
+                const refreshData = async () => {
+                    await Promise.all([fetchEastMoney(), fetchThs()])
+                }
+
+                const fetchAllData = async () => {
+                    isFetching.value = true
+                    fetchStatus.value = []
+
+                    try {
+                        const res = await fetch('/market/fetch/batch', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                cookie: cookieInput.value || null
+                            })
+                        })
+
+                        const data = await res.json()
+                        fetchStatus.value = data.steps || []
+
+                        // 执行完成后刷新页面数据
+                        if (data.success || data.steps.some(s => s.success)) {
+                            await refreshData()
+                        }
+                    } catch (e) {
+                        console.error('批量获取失败:', e)
+                        fetchStatus.value = [{
+                            name: '请求失败',
+                            success: false,
+                            message: e.message || '未知错误',
+                            count: 0
+                        }]
+                    } finally {
+                        isFetching.value = false
                     }
                 }
 
@@ -335,7 +412,12 @@ DASHBOARD_HTML = """
                     searchQuery,
                     filteredEastMoney,
                     filteredThs,
-                    getColorClass
+                    getColorClass,
+                    cookieInput,
+                    isFetching,
+                    fetchStatus,
+                    fetchAllData,
+                    refreshData
                 }
             }
         }).mount('#app')
@@ -617,3 +699,108 @@ async def upload_eastmoney_data(request: Request):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"数据处理异常: {str(e)}",
         )
+
+
+@app.post(
+    "/market/fetch/batch",
+    response_model=schemas.BatchFetchResponse,
+    summary="一键获取所有板块数据(东方财富行业+概念+同花顺)",
+    tags=["Market"],
+)
+async def trigger_fetch_batch(request: schemas.BatchFetchRequest):
+    """
+    一键获取所有板块数据，按顺序执行：
+    1. 东方财富行业板块 (fs_type=2)
+    2. 东方财富概念板块 (fs_type=3)
+    3. 同花顺板块
+    全部完成后返回每一步的执行结果。
+    """
+    logger.info(f"开始批量获取板块数据: cookie_provided={bool(request.cookie)}")
+
+    steps = []
+    all_success = True
+
+    # 步骤 1: 东方财富行业板块 (fs_type=2)
+    try:
+        logger.info("步骤 1/3: 获取东方财富行业板块...")
+        sectors = await market.fetch_eastmoney_sectors(
+            cookie=request.cookie, fs_type=2
+        )
+        count = len(sectors) if sectors else 0
+        if sectors:
+            await save_eastmoney_sectors(sectors)
+        steps.append(schemas.BatchFetchStepResult(
+            name="东方财富行业板块",
+            success=count > 0,
+            message=f"获取并保存 {count} 条数据" if count > 0 else "未获取到数据",
+            count=count
+        ))
+        if count == 0:
+            all_success = False
+    except Exception as e:
+        logger.error(f"步骤 1 异常: {e}")
+        steps.append(schemas.BatchFetchStepResult(
+            name="东方财富行业板块",
+            success=False,
+            message=f"异常: {str(e)}",
+            count=0
+        ))
+        all_success = False
+
+    # 步骤 2: 东方财富概念板块 (fs_type=3)
+    try:
+        logger.info("步骤 2/3: 获取东方财富概念板块...")
+        sectors = await market.fetch_eastmoney_sectors(
+            cookie=request.cookie, fs_type=3
+        )
+        count = len(sectors) if sectors else 0
+        if sectors:
+            await save_eastmoney_sectors(sectors)
+        steps.append(schemas.BatchFetchStepResult(
+            name="东方财富概念板块",
+            success=count > 0,
+            message=f"获取并保存 {count} 条数据" if count > 0 else "未获取到数据",
+            count=count
+        ))
+        if count == 0:
+            all_success = False
+    except Exception as e:
+        logger.error(f"步骤 2 异常: {e}")
+        steps.append(schemas.BatchFetchStepResult(
+            name="东方财富概念板块",
+            success=False,
+            message=f"异常: {str(e)}",
+            count=0
+        ))
+        all_success = False
+
+    # 步骤 3: 同花顺板块
+    try:
+        logger.info("步骤 3/3: 获取同花顺板块...")
+        sectors = await market.fetch_ths_sectors()
+        count = len(sectors) if sectors else 0
+        if sectors:
+            await save_ths_sectors(sectors)
+        steps.append(schemas.BatchFetchStepResult(
+            name="同花顺板块",
+            success=count > 0,
+            message=f"获取并保存 {count} 条数据" if count > 0 else "未获取到数据",
+            count=count
+        ))
+        if count == 0:
+            all_success = False
+    except Exception as e:
+        logger.error(f"步骤 3 异常: {e}")
+        steps.append(schemas.BatchFetchStepResult(
+            name="同花顺板块",
+            success=False,
+            message=f"异常: {str(e)}",
+            count=0
+        ))
+        all_success = False
+
+    return schemas.BatchFetchResponse(
+        success=all_success,
+        message="批量获取完成" if all_success else "部分任务失败",
+        steps=steps
+    )

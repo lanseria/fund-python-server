@@ -13,7 +13,7 @@ from .schemas import SectorInfo, ThsSectorInfo
 
 logger = logging.getLogger(__name__)
 
-from datetime import datetime, date
+from datetime import datetime
 
 # 常量定义
 PAGE_SIZE = 100  # 接口限制最大每页数量
