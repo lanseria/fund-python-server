@@ -99,6 +99,10 @@ async def fetch_and_save_sectors_task():
         if eastmoney_sectors:
             await save_eastmoney_sectors(eastmoney_sectors)
 
+        eastmoney_sectors = await market.fetch_eastmoney_sectors(None, 3)
+        if eastmoney_sectors:
+            await save_eastmoney_sectors(eastmoney_sectors)
+
         # 2. 同花顺数据
         ths_sectors = await market.fetch_ths_sectors()
         if ths_sectors:
