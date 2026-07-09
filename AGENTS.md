@@ -32,6 +32,8 @@ docker compose down                      # 停止服务
 src/python_cli_starter/
 ├── main.py                 # FastAPI 入口，路由定义
 ├── schemas.py              # Pydantic 验证/响应模型
+├── fund_fee.py             # 基金手续费信息获取（不依赖 akshare）
+├── fund_info.py            # 基金完整信息聚合（基本信息+历史净值+费率）
 └── strategies/            # 量化策略模块
     ├── __init__.py                # 策略注册表
     ├── rsi_strategy.py            # RSI 策略
@@ -42,7 +44,9 @@ src/python_cli_starter/
 tests/
 ├── conftest.py          # pytest 配置
 ├── test_api.py          # API 集成测试
-└── test_strategies.py    # 策略单元测试
+├── test_strategies.py    # 策略单元测试
+├── test_fund_fee.py     # 基金手续费接口测试
+└── test_fund_info.py    # 基金完整信息接口测试
 ```
 
 ## API 端点
@@ -52,6 +56,8 @@ tests/
 | `GET /health` | 健康检查 |
 | `GET /strategies` | 获取所有可用策略列表 |
 | `GET /strategies/{strategy_name}/{fund_code}` | 执行指定策略分析 |
+| `GET /funds/{fund_code}/fee` | 获取基金手续费信息 |
+| `GET /fund/info/{fundCode}` | 获取单只基金完整信息（基本信息+历史净值+费率） |
 
 ## 策略说明
 
@@ -92,6 +98,61 @@ tests/
    from . import your_strategy
    STRATEGY_REGISTRY["your_strategy"] = your_strategy.run_strategy
    ```
+
+## 基金手续费接口 (`/funds/{fund_code}/fee`)
+
+通过基金代码获取其手续费（费率）信息，供第三方调用。
+
+- **数据来源**：天天基金网-基金档案-购买信息（`https://fundf10.eastmoney.com/jjfl_{fund_code}.html`）
+- **实现说明**：直接请求页面 HTML 并按区块标题解析，**不使用 akshare 的 `fund_fee_em`**，因其对「申购费率/认购费率」的多级表头（含 `|` 分隔符）解析存在 bug
+- **核心模块**：`fund_fee.get_fund_fee(fund_code)`，返回 7 类费率信息：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `trade_status` | dict | 交易状态（申购/赎回/定投状态等） |
+| `purchase_redemption_amount` | dict | 申购与赎回金额（起点/限额等） |
+| `trade_confirm_days` | dict | 交易确认日（买入/卖出确认日，如 T+1） |
+| `operation_fees` | dict | 运作费用（管理费率/托管费率/销售服务费率） |
+| `subscription_fee_rate` | list | 认购费率（按金额分档） |
+| `purchase_fee_rate` | list | 申购费率（前端，含原费率与天天基金优惠费率） |
+| `redemption_fee_rate` | list | 赎回费率（按持有期限分档） |
+
+> 注意：不同基金类型（混合/股票/债券/货币/ETF）可获取字段差异较大，缺失区块返回空 dict 或空 list。
+
+## 基金完整信息接口 (`/fund/info/{fundCode}`)
+
+获取单只基金的完整信息（基本信息 + 历史净值 + 费率表），供 Nuxt 端 `findOrCreateFund` 调用，一次拿全数据。
+
+- **三源聚合**（均在 0.1~0.3s 级别）：
+  1. 基本信息（名称/类型/费率摘要）：天天基金 `jbgk_{code}.html`
+  2. 历史净值：`akshare.fund_open_fund_info_em`（单位净值走势，全量升序）
+  3. 费率详情：复用 `fund_fee` 模块
+- **核心模块**：`fund_info.get_fund_info(fund_code)`
+- **错误响应**：
+  - `400`：代码格式错误（非 6 位数字）
+  - `404`：基金代码不存在（含天天基金占位页面，基金简称为 `---`）
+  - `5xx`：服务故障
+- **容错降级**：基本信息是核心（失败即 404）；历史净值/费率失败时降级为空列表，不中断整体响应
+
+### fundType 判断规则
+- 基金类型或简称含 `QDII`，或简称含 `LOF` → `"qdii_lof"`
+- 否则 → `"open"`
+
+### 响应字段（对齐前端契约）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `code` | str | 基金代码 |
+| `name` | str | 基金简称 |
+| `fundType` | str | `"open"` \| `"qdii_lof"` |
+| `yesterdayNav` | str | 最新一日单位净值（字符串保留精度） |
+| `navDate` | str | yesterdayNav 对应日期 |
+| `history` | list | 历史净值，按日期升序 `[{date, nav}]` |
+| `fees.purchaseFee` | str\|null | 申购费率（首档优惠费率） |
+| `fees.redemptionFees` | list | 赎回费阶梯 `[{holdingPeriod, rate}]` |
+| `fees.managementFee` | str\|null | 管理费（如 `"0.60%/年"`） |
+| `fees.custodyFee` | str\|null | 托管费 |
+| `fees.rawText` | str\|null | 原始费率说明文本（兜底展示） |
 
 ## Docker 部署
 

@@ -1,6 +1,6 @@
 # src/python_cli_starter/schemas.py
 from pydantic import BaseModel, ConfigDict
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import date, datetime
 from enum import Enum
 
@@ -139,3 +139,59 @@ class FetchWithThsResponse(BaseModel):
     success: bool
     message: str
     steps: list[FetchWithThsStepResult]
+
+
+class FundFeeResponse(BaseModel):
+    """基金手续费信息响应模型。
+
+    7 类费率信息：
+    - 键值对类（dict）：trade_status / purchase_redemption_amount / trade_confirm_days / operation_fees
+    - 分档费率类（list）：subscription_fee_rate / purchase_fee_rate / redemption_fee_rate
+
+    说明：不同基金类型（混合/股票/债券/货币/ETF）可获取的字段差异较大，
+    缺失的区块会返回空 dict 或空 list，调用方按需取用即可。
+    """
+    fund_code: str
+    trade_status: Dict[str, str]                       # 交易状态（申购/赎回/定投状态等）
+    purchase_redemption_amount: Dict[str, str]         # 申购与赎回金额（起点/限额等）
+    trade_confirm_days: Dict[str, str]                 # 交易确认日（买入/卖出确认日）
+    operation_fees: Dict[str, str]                     # 运作费用（管理/托管/销售服务费率）
+    subscription_fee_rate: List[Dict[str, Any]]        # 认购费率（分档）
+    purchase_fee_rate: List[Dict[str, Any]]            # 申购费率（前端，分档）
+    redemption_fee_rate: List[Dict[str, Any]]          # 赎回费率（分档）
+
+
+class FundNavPoint(BaseModel):
+    """历史净值单点（契约字段）。"""
+    date: str
+    nav: str
+
+
+class FundRedemptionFee(BaseModel):
+    """赎回费率阶梯单档（契约字段）。"""
+    holdingPeriod: str
+    rate: str
+
+
+class FundFees(BaseModel):
+    """基金费率信息（契约字段，仅前端展示用）。"""
+    purchaseFee: Optional[str] = None                  # 申购费率（首档优惠费率文本）
+    redemptionFees: List[FundRedemptionFee] = []       # 赎回费率阶梯（按持有期）
+    managementFee: Optional[str] = None                # 管理费
+    custodyFee: Optional[str] = None                   # 托管费
+    rawText: Optional[str] = None                      # 原始费率说明文本（兜底展示）
+
+
+class FundInfoResponse(BaseModel):
+    """基金完整信息响应模型（对齐 Nuxt 端接口契约）。
+
+    一次返回基本信息 + 历史净值 + 费率表，供 findOrCreateFund 写入
+    funds + navHistory + 费率表。
+    """
+    code: str
+    name: str
+    fundType: str                                      # "open" | "qdii_lof"
+    yesterdayNav: str                                  # 最新一日单位净值（字符串保留精度）
+    navDate: str                                       # yesterdayNav 对应日期
+    history: List[FundNavPoint]                        # 历史净值，按日期升序
+    fees: FundFees                                     # 费率信息

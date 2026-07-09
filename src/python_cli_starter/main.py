@@ -3,6 +3,7 @@ from fastapi import FastAPI, HTTPException, Query, status, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 import inspect
+import re
 from typing import Optional
 from contextlib import asynccontextmanager
 import logging
@@ -14,6 +15,8 @@ from .strategies import STRATEGY_REGISTRY
 from . import schemas
 from . import charts
 from . import market
+from . import fund_fee
+from . import fund_info
 from .database import (
     save_eastmoney_sectors,
     save_ths_sectors,
@@ -570,6 +573,113 @@ def get_rsi_chart(fund_code: str):
         )
 
     return chart_data
+
+
+@app.get(
+    "/funds/{fund_code}/fee",
+    response_model=schemas.FundFeeResponse,
+    summary="获取基金手续费信息",
+    tags=["Funds"],
+)
+def get_fund_fee_info(fund_code: str):
+    """
+    根据基金代码获取其手续费（费率）信息，供第三方调用。
+
+    数据来源：天天基金网-基金档案-购买信息。
+
+    返回内容包含 7 类费率信息：
+    - **trade_status**: 交易状态（申购/赎回/定投状态等）
+    - **purchase_redemption_amount**: 申购与赎回金额（起点/限额等）
+    - **trade_confirm_days**: 交易确认日（买入/卖出确认日，如 T+1）
+    - **operation_fees**: 运作费用（管理费率/托管费率/销售服务费率）
+    - **subscription_fee_rate**: 认购费率（分档）
+    - **purchase_fee_rate**: 申购费率（前端，分档，含原费率与天天基金优惠费率）
+    - **redemption_fee_rate**: 赎回费率（按持有期限分档）
+
+    注意：不同基金类型（混合/股票/债券/货币/ETF）可获取的字段差异较大，
+    缺失的区块会返回空 dict 或空 list。
+    """
+    logger.info(f"基金手续费查询请求: code='{fund_code}'")
+
+    try:
+        fee_info = fund_fee.get_fund_fee(fund_code)
+
+        if fee_info is None:
+            logger.warning(f"未获取到基金 {fund_code} 的手续费信息")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"无法获取基金 {fund_code} 的手续费信息，请确认基金代码是否正确。",
+            )
+
+        return schemas.FundFeeResponse(fund_code=fund_code, **fee_info)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"获取基金 {fund_code} 手续费信息时发生意外错误")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取手续费信息时发生内部错误: {str(e)}",
+        )
+
+
+# 基金代码格式：6 位数字
+FUND_CODE_PATTERN = re.compile(r"^\d{6}$")
+
+
+@app.get(
+    "/fund/info/{fundCode}",
+    response_model=schemas.FundInfoResponse,
+    summary="获取单只基金的完整信息",
+    tags=["Fund"],
+)
+def get_fund_info_api(fundCode: str):
+    """
+    获取单只基金的完整信息（基本信息 + 历史净值 + 费率表）。
+
+    供 Nuxt 端 `findOrCreateFund` 调用，一次拿全所有数据，写入
+    `funds` + `navHistory` + 费率表。
+
+    - **fundCode**: 6 位基金代码（path 参数）
+    - **fundType**: `"open"` 或 `"qdii_lof"`，由本服务判断
+    - **history**: 全量历史净值，按日期升序（最早→最新）
+    - **fees**: 费率信息（仅前端展示用）
+
+    错误响应：
+    - `400`: 基金代码格式错误（非 6 位数字）
+    - `404`: 基金代码不存在
+    """
+    logger.info(f"基金完整信息查询请求: code='{fundCode}'")
+
+    # 1. 代码格式校验（6 位数字）
+    if not FUND_CODE_PATTERN.match(fundCode):
+        logger.warning(f"基金代码格式错误: '{fundCode}'")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"基金代码格式错误：'{fundCode}' 不是有效的 6 位数字代码。",
+        )
+
+    # 2. 获取完整信息
+    try:
+        info = fund_info.get_fund_info(fundCode)
+
+        if info is None:
+            logger.warning(f"未获取到基金 {fundCode} 的信息")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"无法获取基金 {fundCode} 的初始信息。",
+            )
+
+        return schemas.FundInfoResponse(**info)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"获取基金 {fundCode} 完整信息时发生意外错误")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取基金信息时发生内部错误: {str(e)}",
+        )
 
 
 @app.get(
