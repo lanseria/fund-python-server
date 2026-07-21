@@ -17,6 +17,7 @@ from . import charts
 from . import market
 from . import fund_fee
 from . import fund_info
+from . import fund_realtime
 from .database import (
     save_eastmoney_sectors,
     save_ths_sectors,
@@ -679,6 +680,125 @@ def get_fund_info_api(fundCode: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取基金信息时发生内部错误: {str(e)}",
+        )
+
+
+@app.get(
+    "/fund/realtime/{fundCode}",
+    response_model=schemas.FundRealtimeEstimation,
+    summary="获取基金实时估值（分钟级）",
+    tags=["Fund"],
+)
+def get_fund_realtime_api(fundCode: str):
+    """
+    获取单只基金的盘中实时估算净值（交易时段内分钟级刷新）。
+
+    数据来源：东方财富盘中估值表（akshare fund_value_estimation_em）。
+
+    - **estimateNav**: 估算单位净值
+    - **estimateGrowthRate**: 估算涨跌幅（%）
+    - **yesterdayNav**: 上一交易日官方净值（来自同表的「上一交易日单位净值」列）
+
+    说明：
+    - 估值数据本身分钟级刷新，本接口进程内缓存 60s，可接受。
+    - 部分基金（QDII 海外/货币型/部分小众基金）不在东财盘中估值列表，
+      返回 404 并提示。
+    - 盘中公布净值字段（publishedNav）在收盘前为 null。
+
+    错误响应：
+    - `400`: 基金代码格式错误（非 6 位数字）
+    - `404`: 基金不在盘中估值列表或数据源不可用
+    """
+    logger.info(f"基金实时估值查询请求: code='{fundCode}'")
+
+    if not FUND_CODE_PATTERN.match(fundCode):
+        logger.warning(f"基金代码格式错误: '{fundCode}'")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"基金代码格式错误：'{fundCode}' 不是有效的 6 位数字代码。",
+        )
+
+    try:
+        result = fund_realtime.get_realtime_estimation(fundCode)
+
+        if result is None:
+            logger.warning(f"未获取到基金 {fundCode} 的实时估值")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"无法获取基金 {fundCode} 的盘中实时估值，"
+                    f"该基金可能不在东方财富盘中估值列表（如 QDII/货币型/小众基金），"
+                    f"或数据源暂时不可用。"
+                ),
+            )
+
+        return schemas.FundRealtimeEstimation(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"获取基金 {fundCode} 实时估值时发生意外错误")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取实时估值时发生内部错误: {str(e)}",
+        )
+
+
+@app.get(
+    "/fund/nav/{fundCode}",
+    response_model=schemas.FundYesterdayNav,
+    summary="获取基金昨日真实净值",
+    tags=["Fund"],
+)
+def get_fund_yesterday_nav_api(fundCode: str):
+    """
+    获取单只基金最近一个交易日的官方单位净值（昨日真实净值）。
+
+    数据来源：akshare fund_open_fund_info_em 单位净值走势，取 tail(1)，
+    与 `/fund/info/{fundCode}` 内部一致。
+
+    - **nav**: 最新一日单位净值（4 位小数字符串）
+    - **navDate**: 净值日期
+    - **growthRate**: 日增长率（%）
+
+    说明：本数据源不返回基金名称，name 字段为空字符串，需从
+    `/fund/info/{fundCode}` 获取。
+
+    错误响应：
+    - `400`: 基金代码格式错误（非 6 位数字）
+    - `404`: 基金代码不存在或无净值数据
+    """
+    logger.info(f"基金昨日净值查询请求: code='{fundCode}'")
+
+    if not FUND_CODE_PATTERN.match(fundCode):
+        logger.warning(f"基金代码格式错误: '{fundCode}'")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"基金代码格式错误：'{fundCode}' 不是有效的 6 位数字代码。",
+        )
+
+    try:
+        result = fund_realtime.get_yesterday_nav(fundCode)
+
+        if result is None:
+            logger.warning(f"未获取到基金 {fundCode} 的昨日净值")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"无法获取基金 {fundCode} 的昨日净值，"
+                    f"请确认基金代码是否正确。"
+                ),
+            )
+
+        return schemas.FundYesterdayNav(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"获取基金 {fundCode} 昨日净值时发生意外错误")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取昨日净值时发生内部错误: {str(e)}",
         )
 
 

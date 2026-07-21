@@ -195,3 +195,42 @@ class FundInfoResponse(BaseModel):
     navDate: str                                       # yesterdayNav 对应日期
     history: List[FundNavPoint]                        # 历史净值，按日期升序
     fees: FundFees                                     # 费率信息
+
+
+class FundRealtimeEstimation(BaseModel):
+    """基金实时估值响应模型（交易时段分钟级刷新）。
+
+    数据来源：东方财富盘中估算表（akshare fund_value_estimation_em）。
+
+    字段说明：
+    - **estimateNav**: 估算单位净值（字符串保留 4 位精度）
+    - **estimateGrowthRate**: 估算涨跌幅（数字百分比，如 -1.85 表示 -1.85%）
+    - **estimateDate**: 估值日期（yyyy-mm-dd，接口未提供分钟级时间戳）
+    - **publishedNav**: 当日官方净值，盘前为 None（收盘后才公布）
+    - **yesterdayNav**: 上一交易日官方净值（来自同表的「上一交易日单位净值」列）
+
+    注意：不同基金类型（QDII/货币型/部分小众基金）可能不在盘中估值列表，
+    此时接口返回 404；部分字段（如 publishedNav 盘前）可能为 None。
+    """
+    code: str
+    name: str
+    estimateNav: Optional[str] = None                  # 估算净值（4 位小数字符串）
+    estimateGrowthRate: Optional[float] = None         # 估算涨跌幅（%）
+    estimateDate: str = ""                             # 估值日期
+    publishedNav: Optional[str] = None                 # 当日官方净值（盘前为 None）
+    publishedGrowthRate: Optional[float] = None        # 当日官方涨跌幅（%）
+    yesterdayNav: Optional[str] = None                 # 上一交易日官方净值
+    yesterdayDate: str = ""                            # 上一交易日日期
+
+
+class FundYesterdayNav(BaseModel):
+    """基金昨日真实净值响应模型（最近一个交易日官方净值）。
+
+    数据来源：akshare fund_open_fund_info_em 单位净值走势，取 tail(1)。
+    与 fund_info._fetch_history_nav 一致。
+    """
+    code: str
+    name: str = ""                                     # 基金名称（该数据源不含，留空）
+    nav: str                                           # 最新一日单位净值（4 位小数字符串）
+    navDate: str                                       # 净值日期（yyyy-mm-dd）
+    growthRate: Optional[float] = None                 # 日增长率（%）

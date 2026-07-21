@@ -34,6 +34,7 @@ src/python_cli_starter/
 ├── schemas.py              # Pydantic 验证/响应模型
 ├── fund_fee.py             # 基金手续费信息获取（不依赖 akshare）
 ├── fund_info.py            # 基金完整信息聚合（基本信息+历史净值+费率）
+├── fund_realtime.py        # 基金实时估值与昨日净值（含 60s 进程内缓存）
 └── strategies/            # 量化策略模块
     ├── __init__.py                # 策略注册表
     ├── rsi_strategy.py            # RSI 策略
@@ -46,7 +47,8 @@ tests/
 ├── test_api.py          # API 集成测试
 ├── test_strategies.py    # 策略单元测试
 ├── test_fund_fee.py     # 基金手续费接口测试
-└── test_fund_info.py    # 基金完整信息接口测试
+├── test_fund_info.py    # 基金完整信息接口测试
+└── test_fund_realtime.py # 基金实时估值与昨日净值接口测试
 ```
 
 ## API 端点
@@ -58,6 +60,8 @@ tests/
 | `GET /strategies/{strategy_name}/{fund_code}` | 执行指定策略分析 |
 | `GET /funds/{fund_code}/fee` | 获取基金手续费信息 |
 | `GET /fund/info/{fundCode}` | 获取单只基金完整信息（基本信息+历史净值+费率） |
+| `GET /fund/realtime/{fundCode}` | 获取基金盘中实时估值（分钟级，60s 缓存） |
+| `GET /fund/nav/{fundCode}` | 获取基金昨日真实净值 |
 
 ## 策略说明
 
@@ -153,6 +157,59 @@ tests/
 | `fees.managementFee` | str\|null | 管理费（如 `"0.60%/年"`） |
 | `fees.custodyFee` | str\|null | 托管费 |
 | `fees.rawText` | str\|null | 原始费率说明文本（兜底展示） |
+
+## 基金实时估值接口 (`/fund/realtime/{fundCode}`)
+
+获取单只基金的盘中实时估算净值（交易时段内分钟级刷新）。
+
+- **数据来源**：东方财富盘中估值表（`akshare.fund_value_estimation_em`）
+- **核心模块**：`fund_realtime.get_realtime_estimation(fund_code)`
+- **缓存策略**：进程内缓存 60 秒（估值分钟级刷新，60s 延迟可接受）；缓存过期或为空时重建
+- **实现要点**：
+  - 旧的实时估值 JSONP 接口 `fundgz.1234567.com.cn/js/{code}.js` 已废弃失效，改用东财官方盘中估值表
+  - `fund_value_estimation_em(symbol='全部')` 存在 20000 行截断 bug，会漏掉部分基金（典型如主流 LOF）；因此合并 `['全部', 'LOF', '场内交易基金']` 多个 symbol 去重
+  - 估值表列名嵌有动态当天日期（如 `2026-07-21-估算数据-估算值`），无法硬编码，按列位置（iloc）取值
+- **错误响应**：
+  - `400`：代码格式错误（非 6 位数字）
+  - `404`：基金不在东财盘中估值列表（QDII/货币型/部分小众基金），或数据源不可用
+  - `5xx`：服务故障
+
+### 响应字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `code` | str | 基金代码 |
+| `name` | str | 基金名称 |
+| `estimateNav` | str\|null | 估算单位净值（4 位小数字符串） |
+| `estimateGrowthRate` | float\|null | 估算涨跌幅（%，如 `-1.85` 表示 -1.85%） |
+| `estimateDate` | str | 估值日期（接口仅到日级，无分钟级时间戳） |
+| `publishedNav` | str\|null | 当日官方净值（盘前为 null，收盘后公布） |
+| `publishedGrowthRate` | float\|null | 当日官方涨跌幅（%） |
+| `yesterdayNav` | str\|null | 上一交易日官方净值（来自同表「上一交易日单位净值」列） |
+| `yesterdayDate` | str | 上一交易日日期 |
+
+> 注意：QDII（T+2 净值）/货币型/部分小众基金不在东财盘中估值列表，会返回 404。如需此类基金的估值，需基于季报重仓股 + 实时股价自行估算（本接口暂不实现）。
+
+## 基金昨日净值接口 (`/fund/nav/{fundCode}`)
+
+获取单只基金最近一个交易日的官方单位净值（昨日真实净值）。
+
+- **数据来源**：`akshare.fund_open_fund_info_em`（单位净值走势），取 `tail(1)`，与 `fund_info._fetch_history_nav` 一致
+- **核心模块**：`fund_realtime.get_yesterday_nav(fund_code)`
+- **错误响应**：
+  - `400`：代码格式错误（非 6 位数字）
+  - `404`：基金代码不存在或无净值数据
+  - `5xx`：服务故障
+
+### 响应字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `code` | str | 基金代码 |
+| `name` | str | 基金名称（该数据源不含，留空，需从 `/fund/info/{fundCode}` 获取） |
+| `nav` | str | 最新一日单位净值（4 位小数字符串） |
+| `navDate` | str | 净值日期（yyyy-mm-dd） |
+| `growthRate` | float\|null | 日增长率（%） |
 
 ## Docker 部署
 
