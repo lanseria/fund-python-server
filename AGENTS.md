@@ -1,7 +1,3 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## 项目概览
 
 基金策略分析 API 服务，基于 FastAPI 构建。提供多种量化技术指标策略（RSI、MACD、布林带、双重确认）的基金交易信号分析。
