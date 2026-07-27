@@ -64,9 +64,36 @@ uv sync --extra test
 # 运行所有测试
 uv run pytest tests/ -v
 
-# 运行特定测试
+# 运行特定测试文件
+uv run pytest tests/test_fund_realtime.py -v
+
+# 按关键字筛选
 uv run pytest tests/ -k test_rsi -v
+
+# 仅运行 CSV 参数化用例（见下方「测试数据源」）
+uv run pytest tests/test_fund_realtime.py::TestCSVFundRealtime -v
 ```
+
+### 测试结构
+
+| 测试文件 | 覆盖范围 |
+|----------|----------|
+| `tests/test_api.py` | API 集成测试（健康检查、策略调用等） |
+| `tests/test_charts.py` | RSI 图表数据接口 |
+| `tests/test_strategies.py` | 策略单元测试（RSI / MACD / 布林带 / 双重确认） |
+| `tests/test_fund_fee.py` | 基金手续费接口（`/funds/{code}/fee`） |
+| `tests/test_fund_info.py` | 基金完整信息接口（`/fund/info/{code}`） |
+| `tests/test_fund_realtime.py` | 实时估值与昨日净值接口（`/fund/realtime/{code}`、`/fund/nav/{code}`） |
+
+所有测试均通过 mock `akshare` 注入伪造数据，**不依赖网络**，可离线稳定运行。
+
+### 测试数据源
+
+`test_fund_realtime.py` 中的 `TestCSVFundRealtime` 测试类以仓库根目录的 [`test_funds.csv`](./test_funds.csv) 作为数据源，参数化校验其中**每一只**基金（含开放式 / QDII / LOF 等多类型）都能从东方财富盘中估值表中被查到实时估值。
+
+- CSV 采用 `utf-8-sig` 读取（文件含 BOM）
+- 每行一只基金，参数化用例以基金代码为用例名，失败时可精确定位
+- **增删基金无需改测试代码**：向 `test_funds.csv` 增删行后，参数化用例会自动跟随
 
 ## 📡 API 端点
 

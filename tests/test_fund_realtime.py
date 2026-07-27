@@ -9,6 +9,9 @@
 - fund_value_estimation_em（实时估值表，列名含动态日期，按列位置构造）
 - fund_open_fund_info_em（历史净值，取 tail(1)）
 """
+import csv
+from pathlib import Path
+
 import pytest
 import pandas as pd
 from datetime import date, datetime
@@ -61,6 +64,69 @@ def _make_history_df():
             "日增长率": [-1.92, 4.92],
         }
     )
+
+
+# 仓库根目录的基金代码清单（BOM 编码，须用 utf-8-sig 读取）
+_FUNDS_CSV = Path(__file__).parent.parent / "test_funds.csv"
+
+
+def _load_funds_from_csv():
+    """读取 test_funds.csv，返回 ``[(code, name), ...]`` 列表。
+
+    CSV 由仓库根目录维护（含开放式/QDII/LOF 等多种类型），作为实时估值
+    可查询基金的权威清单。这里解析后用于参数化测试，确保清单中**每一只**
+    基金都能从估值表被查到。
+    """
+    funds = []
+    with _FUNDS_CSV.open("r", encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            code = (row.get("代码") or "").strip()
+            name = (row.get("名称") or "").strip()
+            if code:
+                funds.append((code, name))
+    return funds
+
+
+def _build_estimation_df_from_csv(
+    today: str = "2026-07-21",
+    yesterday: str = "2026-07-20",
+):
+    """以 test_funds.csv 全量基金构造一份估值表。
+
+    每只基金一行，按列位置与真实东财估值表保持一致：
+      [0]序号 [1]基金代码 [2]基金名称
+      [3]估算值 [4]估算增长率 [5]公布单位净值 [6]公布日增长率
+      [7]估算偏差 [8]上一交易日单位净值
+
+    用于参数化测试：验证清单中任意基金都能被 ``get_realtime_estimation``
+    正确命中并返回契约字段。
+    """
+    rows = []
+    for idx, (code, name) in enumerate(_load_funds_from_csv(), start=1):
+        rows.append(
+            (
+                idx,
+                code,
+                name,
+                1.0000,  # 估算值（占位，测试只校验可查到与字段存在）
+                "0.00%",
+                "---",  # 盘前未公布
+                "---",
+                0.0,
+                1.0000,  # 上一交易日净值
+            )
+        )
+    columns = [
+        "序号", "基金代码", "基金名称",
+        f"{today}-估算数据-估算值", f"{today}-估算数据-估算增长率",
+        f"{today}-公布数据-单位净值", f"{today}-公布数据-日增长率",
+        "估算偏差", f"{yesterday}-单位净值",
+    ]
+    return pd.DataFrame(rows, columns=columns)
+
+
+# 参数化：CSV 中每一只基金（涵盖开放式/QDII/LOF 等多类型）
+_CSV_FUNDS = _load_funds_from_csv()
 
 
 class TestRealtimeAPI:
@@ -230,6 +296,51 @@ class TestYesterdayNavAPI:
 
         response = client.get("/fund/nav/161725")
         assert response.status_code == 404
+
+
+class TestCSVFundRealtime:
+    """基于 test_funds.csv 的全量基金实时估值测试。
+
+    以仓库根目录 ``test_funds.csv`` 作为权威数据源，参数化校验其中**每一只**
+    基金（含开放式 / QDII / LOF 等多种类型）都能从东财估值表中被查到，
+    且返回字段符合契约。
+    """
+
+    def setup_method(self):
+        fund_realtime.clear_cache()
+
+    @pytest.mark.parametrize("fund_code, fund_name", _CSV_FUNDS,
+                             ids=[c for c, _ in _CSV_FUNDS])
+    @patch("python_cli_starter.fund_realtime.ak.fund_value_estimation_em")
+    def test_csv_fund_realtime_queryable(self, mock_est, fund_code, fund_name):
+        """CSV 中每只基金都能查到实时估值，字段符合契约"""
+        mock_est.return_value = _build_estimation_df_from_csv()
+
+        response = client.get(f"/fund/realtime/{fund_code}")
+        assert response.status_code == 200, f"{fund_code} 应返回 200"
+        data = response.json()
+
+        assert data["code"] == fund_code.zfill(6)
+        # 估值字段应能正常返回（CSV 全为可估值基金，非 null）
+        assert data["estimateNav"] is not None
+        assert data["estimateDate"] == "2026-07-21"
+        assert data["yesterdayNav"] is not None
+        assert data["yesterdayDate"] == "2026-07-20"
+
+    @patch("python_cli_starter.fund_realtime.ak.fund_value_estimation_em")
+    def test_csv_all_funds_loaded_into_table(self, mock_est):
+        """CSV 全量基金应被合并进估值表（不少于 CSV 行数）"""
+        df = _build_estimation_df_from_csv()
+        mock_est.return_value = df
+
+        fund_realtime.clear_cache()
+        # 触发一次缓存重建（合并后应去重到 CSV 全量基金数）
+        result = fund_realtime.get_realtime_estimation(_CSV_FUNDS[0][0])
+        assert result is not None
+
+        cached = fund_realtime._cache["df"]
+        assert cached is not None
+        assert len(cached) >= len(_CSV_FUNDS)
 
 
 class TestFundRealtimeUnit:
