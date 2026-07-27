@@ -89,7 +89,7 @@ uv run pytest tests/test_fund_realtime.py::TestCSVFundRealtime -v
 
 ### 测试数据源
 
-`test_fund_realtime.py` 中的 `TestCSVFundRealtime` 测试类以仓库根目录的 [`test_funds.csv`](./test_funds.csv) 作为数据源，参数化校验其中**每一只**基金（含开放式 / QDII / LOF 等多类型）都能从东方财富盘中估值表中被查到实时估值。
+`test_fund_realtime.py` 中的 `TestCSVFundRealtime` 测试类以仓库根目录的 [`test_funds.csv`](./test_funds.csv) 作为数据源，参数化校验其中**每一只**基金（含开放式 / QDII / LOF 等多类型）都能通过 powercloud 接口被查到实时估值。
 
 - CSV 采用 `utf-8-sig` 读取（文件含 BOM）
 - 每行一只基金，参数化用例以基金代码为用例名，失败时可精确定位
@@ -126,6 +126,16 @@ uv run pytest tests/test_fund_realtime.py::TestCSVFundRealtime -v
 | `GET /market/sector_names` | 获取两家数据源的板块名称列表 |
 | `POST /market/fetch/eastmoney` | 手动触发获取东方财富板块数据 |
 | `POST /market/upload/eastmoney` | 手动上传东方财富JSONP数据 |
+
+### Fund
+| 端点 | 方法 | 功能 |
+|------|------|------|
+| `GET /funds/{fund_code}/fee` | 获取基金手续费信息 |
+| `GET /fund/info/{fundCode}` | 获取基金完整信息（基本信息+历史净值+费率） |
+| `GET /fund/realtime/{fundCode}` | 获取基金盘中实时估值（分钟级，powercloud 聚合） |
+| `GET /fund/nav/{fundCode}` | 获取基金昨日真实净值 |
+
+> **实时估值数据源**：powercloud 聚合接口（已封装东财实时估算 + 历史净值回退 + QDII 处理）。`estimateNav` 取东财原值 `gsz`；`quoteSource`/`message` 标识数据状态；`intraday` 返回盘中分时数据（非交易时段为空）。QDII/货币型等无盘中估值的基金自动回退到最近净值。
 
 ### 策略参数说明
 

@@ -200,27 +200,35 @@ class FundInfoResponse(BaseModel):
 class FundRealtimeEstimation(BaseModel):
     """基金实时估值响应模型（交易时段分钟级刷新）。
 
-    数据来源：东方财富盘中估算表（akshare fund_value_estimation_em）。
+    数据来源：powercloud 聚合接口 ``monitor.powercloud.work/api/fund/{code}``
+    （已封装东财实时估算 + 历史净值回退 + QDII 处理）。
 
     字段说明：
-    - **estimateNav**: 估算单位净值（字符串保留 4 位精度）
+    - **estimateNav**: 估算单位净值（4 位小数字符串，来自 ``gsz`` 原值）
     - **estimateGrowthRate**: 估算涨跌幅（数字百分比，如 -1.85 表示 -1.85%）
-    - **estimateDate**: 估值日期（yyyy-mm-dd，接口未提供分钟级时间戳）
-    - **publishedNav**: 当日官方净值，盘前为 None（收盘后才公布）
-    - **yesterdayNav**: 上一交易日官方净值（来自同表的「上一交易日单位净值」列）
+    - **estimateDate**: 估值日期（yyyy-mm-dd）
+    - **publishedNav**: 已确认官方净值（有则填，盘前/QDII 为 None）
+    - **publishedGrowthRate**: 已确认官方涨跌幅（%）
+    - **yesterdayNav**: 上一交易日单位净值（来自 ``dwjz``）
+    - **quoteSource**: 数据来源标识（``realtime`` 盘中实时 / ``history_fallback`` 历史回退）
+    - **message**: 状态说明（如「QDII暂无盘中估值，展示最近净值」）
+    - **intraday**: 盘中分时数据（``[{time, value, ...}]``，非交易时段为空数组）
 
-    注意：不同基金类型（QDII/货币型/部分小众基金）可能不在盘中估值列表，
-    此时接口返回 404；部分字段（如 publishedNav 盘前）可能为 None。
+    注意：QDII / 货币型等无盘中估值的基金，``success`` 为 False 时会回退到最近净值，
+    通过 ``quoteSource`` / ``message`` 标识。
     """
     code: str
     name: str
     estimateNav: Optional[str] = None                  # 估算净值（4 位小数字符串）
     estimateGrowthRate: Optional[float] = None         # 估算涨跌幅（%）
     estimateDate: str = ""                             # 估值日期
-    publishedNav: Optional[str] = None                 # 当日官方净值（盘前为 None）
-    publishedGrowthRate: Optional[float] = None        # 当日官方涨跌幅（%）
-    yesterdayNav: Optional[str] = None                 # 上一交易日官方净值
+    publishedNav: Optional[str] = None                 # 已确认官方净值（无则 None）
+    publishedGrowthRate: Optional[float] = None        # 已确认官方涨跌幅（%）
+    yesterdayNav: Optional[str] = None                 # 上一交易日单位净值
     yesterdayDate: str = ""                            # 上一交易日日期
+    quoteSource: Optional[str] = None                  # 数据来源标识
+    message: str = ""                                  # 状态说明
+    intraday: List[Dict[str, Any]] = []                # 盘中分时数据（非交易时段为空）
 
 
 class FundYesterdayNav(BaseModel):

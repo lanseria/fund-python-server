@@ -693,21 +693,22 @@ def get_fund_realtime_api(fundCode: str):
     """
     获取单只基金的盘中实时估算净值（交易时段内分钟级刷新）。
 
-    数据来源：东方财富盘中估值表（akshare fund_value_estimation_em）。
+    数据来源：powercloud 聚合接口（已封装东财实时估算 + 历史净值回退 + QDII 处理）。
 
-    - **estimateNav**: 估算单位净值
+    - **estimateNav**: 估算单位净值（原值，非反算）
     - **estimateGrowthRate**: 估算涨跌幅（%）
-    - **yesterdayNav**: 上一交易日官方净值（来自同表的「上一交易日单位净值」列）
+    - **yesterdayNav**: 上一交易日单位净值
+    - **quoteSource**: 数据来源标识（`realtime` / `history_fallback`）
+    - **message**: 状态说明（如「QDII暂无盘中估值」）
+    - **intraday**: 盘中分时数据（非交易时段为空数组）
 
     说明：
-    - 估值数据本身分钟级刷新，本接口进程内缓存 60s，可接受。
-    - 部分基金（QDII 海外/货币型/部分小众基金）不在东财盘中估值列表，
-      返回 404 并提示。
-    - 盘中公布净值字段（publishedNav）在收盘前为 null。
+    - QDII / 货币型等无盘中估值的基金，会回退到最近净值，通过 `quoteSource`/`message` 标识。
+    - `publishedNav` 在官方净值未确认时为 null。
 
     错误响应：
     - `400`: 基金代码格式错误（非 6 位数字）
-    - `404`: 基金不在盘中估值列表或数据源不可用
+    - `404`: 基金不存在或数据源不可用
     """
     logger.info(f"基金实时估值查询请求: code='{fundCode}'")
 

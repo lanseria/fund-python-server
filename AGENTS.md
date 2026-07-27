@@ -30,7 +30,7 @@ src/python_cli_starter/
 ├── schemas.py              # Pydantic 验证/响应模型
 ├── fund_fee.py             # 基金手续费信息获取（不依赖 akshare）
 ├── fund_info.py            # 基金完整信息聚合（基本信息+历史净值+费率）
-├── fund_realtime.py        # 基金实时估值与昨日净值（含 60s 进程内缓存）
+├── fund_realtime.py        # 基金实时估值（powercloud 聚合）与昨日净值
 └── strategies/            # 量化策略模块
     ├── __init__.py                # 策略注册表
     ├── rsi_strategy.py            # RSI 策略
@@ -56,7 +56,7 @@ tests/
 | `GET /strategies/{strategy_name}/{fund_code}` | 执行指定策略分析 |
 | `GET /funds/{fund_code}/fee` | 获取基金手续费信息 |
 | `GET /fund/info/{fundCode}` | 获取单只基金完整信息（基本信息+历史净值+费率） |
-| `GET /fund/realtime/{fundCode}` | 获取基金盘中实时估值（分钟级，60s 缓存） |
+| `GET /fund/realtime/{fundCode}` | 获取基金盘中实时估值（分钟级，powercloud 聚合） |
 | `GET /fund/nav/{fundCode}` | 获取基金昨日真实净值 |
 
 ## 策略说明
@@ -158,16 +158,20 @@ tests/
 
 获取单只基金的盘中实时估算净值（交易时段内分钟级刷新）。
 
-- **数据来源**：东方财富盘中估值表（`akshare.fund_value_estimation_em`）
+- **数据来源**：powercloud 聚合接口 `monitor.powercloud.work/api/fund/{code}`（`fund_realtime._fetch_powercloud_estimation`）
+  - 已封装好「东财实时估算 + 历史净值回退 + QDII 处理」，单次请求返回 `basic` + `intraday` + `history` + `holdings`
+  - 响应 ~0.35s，稳定
 - **核心模块**：`fund_realtime.get_realtime_estimation(fund_code)`
-- **缓存策略**：进程内缓存 60 秒（估值分钟级刷新，60s 延迟可接受）；缓存过期或为空时重建
 - **实现要点**：
-  - 旧的实时估值 JSONP 接口 `fundgz.1234567.com.cn/js/{code}.js` 已废弃失效，改用东财官方盘中估值表
-  - `fund_value_estimation_em(symbol='全部')` 存在 20000 行截断 bug，会漏掉部分基金（典型如主流 LOF）；因此合并 `['全部', 'LOF', '场内交易基金']` 多个 symbol 去重
-  - 估值表列名嵌有动态当天日期（如 `2026-07-21-估算数据-估算值`），无法硬编码，按列位置（iloc）取值
+  - powercloud `basic` 字段为东财原始命名，映射关系：`gsz`→estimateNav（估算净值**原值**）、`gszzl`→estimateGrowthRate、`dwjz`→yesterdayNav、`gztime`→estimateDate、`jzrq`→yesterdayDate、`confirmed_nav`→publishedNav、`confirmed_change`→publishedGrowthRate
+  - `success` / `quote_source` / `message` 标识数据状态：`realtime`（盘中实时估算）vs `history_fallback`（非交易时段/QDII 回退到最近净值）
+  - QDII（T+2 净值）/ 货币型 等无盘中估值的基金，powercloud 自动回退到最近净值并标注（不再返回 404）
+  - 占位符（`-` / `---` / 空）统一转为 `null`
+  - powercloud 对非 6 位代码（如 5 位）可能误匹配，故代码格式校验（6 位数字）由 API 路由层保证，先于数据源调用
+  - 历史演进：东财 `fundgz` JSONP（已废弃）→ akshare 东财估值表（底层接口失效）→ 新浪单只（估算净值需反算）→ powercloud 聚合（当前）
 - **错误响应**：
   - `400`：代码格式错误（非 6 位数字）
-  - `404`：基金不在东财盘中估值列表（QDII/货币型/部分小众基金），或数据源不可用
+  - `404`：基金不存在（powercloud 返回 name==code 且 gsz 为占位符），或数据源不可用
   - `5xx`：服务故障
 
 ### 响应字段
@@ -176,15 +180,18 @@ tests/
 |------|------|------|
 | `code` | str | 基金代码 |
 | `name` | str | 基金名称 |
-| `estimateNav` | str\|null | 估算单位净值（4 位小数字符串） |
+| `estimateNav` | str\|null | 估算单位净值（4 位小数字符串，来自 `gsz` 原值） |
 | `estimateGrowthRate` | float\|null | 估算涨跌幅（%，如 `-1.85` 表示 -1.85%） |
-| `estimateDate` | str | 估值日期（接口仅到日级，无分钟级时间戳） |
-| `publishedNav` | str\|null | 当日官方净值（盘前为 null，收盘后公布） |
-| `publishedGrowthRate` | float\|null | 当日官方涨跌幅（%） |
-| `yesterdayNav` | str\|null | 上一交易日官方净值（来自同表「上一交易日单位净值」列） |
+| `estimateDate` | str | 估值日期（yyyy-mm-dd） |
+| `publishedNav` | str\|null | 已确认官方净值（有则填，盘前/QDII 为 null） |
+| `publishedGrowthRate` | float\|null | 已确认官方涨跌幅（%） |
+| `yesterdayNav` | str\|null | 上一交易日单位净值（来自 `dwjz`） |
 | `yesterdayDate` | str | 上一交易日日期 |
+| `quoteSource` | str\|null | 数据来源标识（`realtime` / `history_fallback`） |
+| `message` | str | 状态说明（如「QDII暂无盘中估值，展示最近净值」） |
+| `intraday` | list | 盘中分时数据 `[{time, value, ...}]`，非交易时段为空数组 |
 
-> 注意：QDII（T+2 净值）/货币型/部分小众基金不在东财盘中估值列表，会返回 404。如需此类基金的估值，需基于季报重仓股 + 实时股价自行估算（本接口暂不实现）。
+> 行为变化（2026-07）：数据源从新浪单只接口改为 powercloud 聚合接口。收益：估算净值用原值（`gsz`，非反算）、恢复 `publishedNav` 官方净值填充、新增 `intraday` 分时数据与 `quoteSource`/`message` 状态标识。代价：强依赖外部 powercloud 服务（它宕机则实时估值不可用，返回 404）。
 
 ## 基金昨日净值接口 (`/fund/nav/{fundCode}`)
 

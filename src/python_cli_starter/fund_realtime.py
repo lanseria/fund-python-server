@@ -7,46 +7,55 @@
     2. ``get_yesterday_nav``        — 最近一个交易日的官方单位净值（昨日真实净值）
 
 数据源：
-    - 实时估值：akshare ``fund_value_estimation_em``（东方财富盘中估值，全市场聚合表）
+    - 实时估值：``monitor.powercloud.work/api/fund/{code}`` 聚合接口
     - 昨日净值：akshare ``fund_open_fund_info_em``（单位净值走势，取 tail(1)，与
       本仓库 ``fund_info._fetch_history_nav`` 一致）
 
 实现要点：
-    - 旧的实时估值 JSONP 接口 ``fundgz.1234567.com.cn/js/{code}.js`` 已废弃失效，
-      改用东财官方盘中估值表。
-    - ``fund_value_estimation_em(symbol='全部')`` 存在 20000 行截断 bug，会漏掉部分
-      基金（典型如主流 LOF）。因此合并多个 symbol 类型去重后缓存。
-    - 估值表列名嵌有动态当天日期（如 ``2026-07-21-估算数据-估算值``），无法硬编码，
-      统一按列位置（iloc）取值。
-    - 估值表全市场拉取约 0.3~1.7s，且估值本身仅分钟级更新，故采用进程内 60s 缓存。
+    - 实时估值改用 powercloud 聚合接口：它已封装好「东财实时估算 + 历史净值回退 +
+      QDII 处理」，字段语义清晰（``gsz`` 估算净值原值、``confirmed_nav`` 官方净值、
+      ``success``/``quote_source``/``message`` 状态标识）。
+    - 历史上先后用过：东财 ``fundgz`` JSONP（已废弃）、akshare 东财估值表
+      ``fund_value_estimation_em``（底层接口失效致全量基金无法估值）、新浪
+      ``hq.sinajs.cn``（估算净值需反算）。现统一收敛到 powercloud。
+    - powercloud 对非 6 位代码（如 5 位）可能误匹配，故代码格式校验（6 位数字）
+      由调用方（API 路由层）保证，先于数据源调用。
+    - powercloud 额外返回 ``intraday``（盘中分时）、``history``、``holdings``，
+      本模块仅透传 ``intraday`` 分时数据（非交易时段为空数组）。
 """
 
 import logging
-import time
 from typing import Any, Dict, List, Optional
 
 import akshare as ak
 import pandas as pd
+import requests
 
 logger = logging.getLogger(__name__)
 
-# 合并多个 symbol 类型拉取估值表，规避 fund_value_estimation_em('全部') 的 20000 行截断 bug
-# （'全部' 会漏掉大量基金，包括主流 LOF 如 161725；'LOF' / '场内交易基金' 可补全）
-_ESTIMATION_SYMBOLS: List[str] = ["全部", "LOF", "场内交易基金"]
+# powercloud 聚合接口
+_POWERCLOUD_URL_TPL = "https://monitor.powercloud.work/api/fund/{code}"
+_POWERCLOUD_TIMEOUT = 10.0
+_POWERCLOUD_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+}
 
-# 进程内缓存（估值分钟级刷新，缓存 60s 延迟完全可接受）
-_CACHE_TTL = 60.0  # 秒
-_cache: Dict[str, Any] = {"df": None, "ts": 0.0}
+# 东财/akshare 常用占位符，命中即视为无数据
+_PLACEHOLDERS = {"", "-", "---", "—", "--", "nan", "NaN"}
 
 
 def _to_float(value: Any) -> Optional[float]:
-    """把估值表里的百分比/数值字符串稳健转为 float。失败/空值返回 None。"""
+    """把字符串/数值稳健转为 float。失败/空值/占位符返回 None。"""
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
     try:
         s = str(value).strip()
-        # 跳过东财的占位符
-        if s in ("", "---", "—", "--", "nan", "NaN"):
+        if s in _PLACEHOLDERS:
             return None
         # 去掉百分号
         if s.endswith("%"):
@@ -56,122 +65,118 @@ def _to_float(value: Any) -> Optional[float]:
         return None
 
 
-def _load_merged_table() -> Optional[pd.DataFrame]:
+def _fetch_powercloud_estimation(fund_code: str) -> Optional[Dict[str, Any]]:
     """
-    拉取多个 symbol 的估值表并按基金代码去重合并。
+    请求 powercloud 聚合接口并解析 ``basic`` + ``intraday``。
 
-    单个 symbol 异常时降级跳过；全部失败返回 None。
+    powercloud ``basic`` 关键字段（东财原始命名）：
+        - ``gsz``      盘中估算净值（实时估算时为当前估值；非交易时段/QDII 回退到最近净值）
+        - ``gszzl``    估算涨跌幅（%）
+        - ``gztime``   估值时间
+        - ``dwjz``     单位净值（即上一确认日净值）
+        - ``jzrq``     净值日期
+        - ``confirmed_nav``    已确认官方净值
+        - ``confirmed_change`` 已确认官方涨跌幅
+        - ``confirmed_date``   官方净值日期
+        - ``name``     基金名称
+        - ``success``  是否有盘中实时估算（非交易时段/QDII 为 False）
+        - ``quote_source`` 数据来源标识（``realtime`` / ``history_fallback`` 等）
+        - ``message``  状态说明
+
+    :return: 含 ``basic`` / ``intraday`` 的字典；请求失败或无数据返回 None。
     """
-    frames: List[pd.DataFrame] = []
-    for symbol in _ESTIMATION_SYMBOLS:
-        try:
-            df = ak.fund_value_estimation_em(symbol=symbol)
-        except Exception as e:
-            logger.warning(f"[FundRealtime] 估值表拉取失败 symbol={symbol}: {e}")
-            continue
-        if df is None or df.empty or df.shape[1] < 9:
-            continue
-        frames.append(df)
-
-    if not frames:
+    fund_code = str(fund_code)
+    url = _POWERCLOUD_URL_TPL.format(code=fund_code)
+    try:
+        resp = requests.get(
+            url, headers=_POWERCLOUD_HEADERS, timeout=_POWERCLOUD_TIMEOUT
+        )
+    except Exception as e:
+        logger.warning(f"[FundRealtime] powercloud 请求异常 code={fund_code}: {e}")
         return None
 
-    merged = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
-    if merged.empty:
+    if resp.status_code != 200:
+        logger.warning(
+            f"[FundRealtime] powercloud 响应非 200 code={fund_code} "
+            f"status={resp.status_code}"
+        )
         return None
 
-    # 列 [1] = 基金代码，按其去重保留首行
-    merged = merged.drop_duplicates(subset=[merged.columns[1]], keep="first")
-    logger.info(
-        f"[FundRealtime] 估值表合并完成: {len(merged)} 只基金 "
-        f"(来源 symbol: {[s for s in _ESTIMATION_SYMBOLS]})"
-    )
-    return merged.reset_index(drop=True)
-
-
-def _get_cached_table() -> Optional[pd.DataFrame]:
-    """
-    获取（必要时刷新）进程内缓存的估值表。
-
-    缓存 TTL 为 ``_CACHE_TTL`` 秒。过期或为空时重建。
-    """
-    now = time.monotonic()
-    if _cache["df"] is not None and (now - _cache["ts"]) < _CACHE_TTL:
-        return _cache["df"]
-
-    df = _load_merged_table()
-    if df is None:
-        # 拉取失败：若仍有旧缓存可继续用，否则返回 None（由上层转 404/降级）
-        if _cache["df"] is not None:
-            logger.warning("[FundRealtime] 估值表刷新失败，回退使用旧缓存")
-            return _cache["df"]
+    try:
+        payload = resp.json()
+    except ValueError as e:
+        logger.warning(f"[FundRealtime] powercloud 响应非 JSON code={fund_code}: {e}")
         return None
 
-    _cache["df"] = df
-    _cache["ts"] = now
-    return df
+    basic = payload.get("basic") or {}
+    # 基金代码不存在的兜底：powercloud 会返回 name==code 且估算净值为占位符
+    name = str(basic.get("name", "")).strip()
+    gsz = str(basic.get("gsz", "")).strip()
+    if (
+        not basic
+        or name in _PLACEHOLDERS
+        or (name == fund_code and gsz in _PLACEHOLDERS)
+    ):
+        logger.info(f"[FundRealtime] powercloud 无基金 {fund_code} 数据")
+        return None
+
+    intraday = payload.get("intraday") or {}
+    return {
+        "basic": basic,
+        "intraday": list(intraday.get("data") or []),
+    }
 
 
-def clear_cache() -> None:
-    """清空进程内估值表缓存（测试用）。"""
-    _cache["df"] = None
-    _cache["ts"] = 0.0
+def _build_from_powercloud(fund_code: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """把 powercloud 解析结果映射为对外契约字典。"""
+    basic = data.get("basic") or {}
+
+    estimate_nav = _to_float(basic.get("gsz"))
+    estimate_growth = _to_float(basic.get("gszzl"))
+    yesterday_nav = _to_float(basic.get("dwjz"))
+    published_nav = _to_float(basic.get("confirmed_nav"))
+    published_growth = _to_float(basic.get("confirmed_change"))
+
+    return {
+        "code": fund_code,
+        "name": str(basic.get("name", "")).strip(),
+        "estimateNav": _fmt_float(estimate_nav),
+        "estimateGrowthRate": estimate_growth,
+        "estimateDate": str(basic.get("gztime", "")).strip(),
+        "publishedNav": _fmt_float(published_nav),
+        "publishedGrowthRate": published_growth,
+        "yesterdayNav": _fmt_float(yesterday_nav),
+        "yesterdayDate": str(basic.get("jzrq", "")).strip(),
+        # 新增：状态标识（透明透传，便于前端区分实时估算 vs 历史回退）
+        "quoteSource": str(basic.get("quote_source", "")).strip() or None,
+        "message": str(basic.get("message", "")).strip(),
+        # 新增：盘中分时数据（非交易时段/QDII 为空数组）
+        "intraday": list(data.get("intraday") or []),
+    }
 
 
 def get_realtime_estimation(fund_code: str) -> Optional[Dict[str, Any]]:
     """
     获取单只基金的实时估算净值（交易时段内分钟级刷新）。
 
+    数据源：powercloud 聚合接口（已封装东财实时估算 + 历史净值回退 + QDII 处理）。
+
     :param fund_code: 基金代码（调用方需保证为合法 6 位代码）
-    :return: 契约结构字典；若基金不在东财盘中估值列表返回 None。
-             不同基金类型（QDII/货币型等）部分字段可能为 None。
+    :return: 契约结构字典；数据源不可用或基金不存在返回 None。
+             ``quoteSource``/``message`` 标识数据状态；``intraday`` 为盘中分时
+             （非交易时段为空数组）。
     """
     fund_code = str(fund_code)
-    df = _get_cached_table()
-    if df is None or df.empty:
-        logger.warning(f"[FundRealtime] 估值表不可用，无法查询基金 {fund_code}")
+    data = _fetch_powercloud_estimation(fund_code)
+    if data is None:
+        logger.warning(f"[FundRealtime] 无法获取基金 {fund_code} 的实时估值")
         return None
 
-    # 列位置（列名含动态当天日期，必须按位置取）：
-    #   [0]序号 [1]基金代码 [2]基金名称
-    #   [3]估算值 [4]估算增长率 [5]公布单位净值 [6]公布日增长率 [7]估算偏差
-    #   [8]上一交易日单位净值
-    code_col = df.columns[1]
-    mask = df[code_col].astype(str).str.zfill(6) == fund_code.zfill(6)
-    matched = df[mask]
-    if matched.empty:
-        logger.info(f"[FundRealtime] 基金 {fund_code} 不在盘中估值列表")
-        return None
-
-    row = matched.iloc[0]
-    name = "" if pd.isna(row.iloc[2]) else str(row.iloc[2]).strip()
-    estimate_nav_raw = row.iloc[3]
-    estimate_growth_raw = row.iloc[4]
-    published_nav_raw = row.iloc[5]
-    published_growth_raw = row.iloc[6]
-    yesterday_nav_raw = row.iloc[8] if df.shape[1] > 8 else None
-
-    estimate_nav = _to_float(estimate_nav_raw)
-    estimate_growth = _to_float(estimate_growth_raw)
-    yesterday_nav = _to_float(yesterday_nav_raw)
-    published_nav = _to_float(published_nav_raw)
-
-    # 估值时间：取当天日期（akshare 该接口未返回分钟级时间戳，只能到日）
-    estimate_date = _extract_date_from_column(str(df.columns[3]))
-
-    return {
-        "code": fund_code,
-        "name": name,
-        "estimateNav": _fmt_float(estimate_nav),
-        "estimateGrowthRate": estimate_growth,  # 已是数字百分比，如 -1.85
-        "estimateDate": estimate_date,
-        "publishedNav": _fmt_float(published_nav),  # 盘前为 None
-        "publishedGrowthRate": _to_float(published_growth_raw),
-        "yesterdayNav": _fmt_float(yesterday_nav),
-        "yesterdayDate": _extract_date_from_column(str(df.columns[8]))
-        if df.shape[1] > 8
-        else "",
-    }
+    logger.info(
+        f"[FundRealtime] 基金 {fund_code} 实时估值获取成功 "
+        f"quote_source={data['basic'].get('quote_source')}"
+    )
+    return _build_from_powercloud(fund_code, data)
 
 
 def get_yesterday_nav(fund_code: str) -> Optional[Dict[str, Any]]:
@@ -219,17 +224,6 @@ def get_yesterday_nav(fund_code: str) -> Optional[Dict[str, Any]]:
         "navDate": date_str,
         "growthRate": growth_float,
     }
-
-
-def _extract_date_from_column(col_name: str) -> str:
-    """
-    从估值表动态日期列名（如 ``2026-07-21-估算数据-估算值``）中提取日期部分。
-    """
-    # 取首段非空（按 "-" 切，前 3 段即 yyyy-mm-dd）
-    parts = col_name.split("-")
-    if len(parts) >= 3 and parts[0].isdigit() and len(parts[0]) == 4:
-        return "-".join(parts[:3])
-    return ""
 
 
 def _fmt_float(value: Optional[float]) -> Optional[str]:
