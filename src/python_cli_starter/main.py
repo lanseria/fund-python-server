@@ -18,6 +18,7 @@ from . import market
 from . import fund_fee
 from . import fund_info
 from . import fund_realtime
+from . import sector_capital
 from .database import (
     save_eastmoney_sectors,
     save_ths_sectors,
@@ -1026,3 +1027,143 @@ async def trigger_fetch_with_ths(request: schemas.FetchWithThsRequest):
         message="获取完成" if all_success else "部分任务失败",
         steps=steps
     )
+
+
+@app.get(
+    "/sector/capital",
+    response_model=schemas.SectorCapitalListResponse,
+    summary="获取板块主力资金数据表",
+    tags=["SectorCapital"],
+)
+async def get_sector_capital(
+    type: str = Query(
+        "industry",
+        description="板块类型：`industry`(行业板块,默认) / `concept`(概念板块)",
+    ),
+):
+    """
+    获取全量板块（行业/概念）的主力资金数据表，返回一张完整的「板块主力资金」表。
+
+    数据来源：东方财富板块资金流向接口（实时查询，不落库）。
+
+    返回字段（金额均为「亿元」字符串）：
+    - **changePercent**: 涨幅（%）
+    - **amount**: 成交额
+    - **mainCapital**: 主力资金（主力净流入）
+    - **retailCapital**: 散户资金（小单净流入）
+    - **mainHidden**: 主力暗盘 = 主力资金 - 散户资金
+    - **mainStrength**: 主力强度 = 主力暗盘 / 成交额 * 100（%）
+    - **mainAction**: 主力行为（抢筹 / 建仓 / 洗盘 / 出货）
+
+    错误响应：
+    - `400`: 板块类型 type 非法（仅支持 industry / concept）
+    - `5xx`: 数据源故障
+    """
+    logger.info(f"板块主力资金查询请求: type='{type}'")
+
+    try:
+        fs_type = sector_capital._normalize_fs_type(type)
+    except ValueError as e:
+        logger.warning(f"板块类型非法: type='{type}'")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+    try:
+        sectors = await sector_capital.get_sector_capital_flow(fs_type)
+        if sectors is None:
+            logger.warning(f"未获取到板块主力资金数据 type='{type}'")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="东方财富数据源暂时不可用，请稍后重试。",
+            )
+
+        return schemas.SectorCapitalListResponse(
+            type=fs_type,
+            count=len(sectors),
+            sectors=[schemas.SectorCapitalItem(**s) for s in sectors],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"获取板块主力资金数据时发生意外错误")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取板块主力资金数据时发生内部错误: {str(e)}",
+        )
+
+
+@app.get(
+    "/sector/capital/action/{sector_name}",
+    response_model=schemas.SectorCapitalActionResponse,
+    summary="按板块名查询主力行为",
+    tags=["SectorCapital"],
+)
+async def get_sector_capital_action(
+    sector_name: str,
+    type: str = Query(
+        "industry",
+        description="板块类型：`industry`(行业板块,默认) / `concept`(概念板块)",
+    ),
+):
+    """
+    通过板块名查询其主力行为。
+
+    匹配规则：**精确匹配优先**；找不到则做子串模糊兜底（包含关系，双向），
+    故 ``matched`` 可能大于 1（返回所有命中项）。
+
+    错误响应：
+    - `400`: 板块类型 type 非法，或板块名为空
+    - `404`: 板块名无任何精确/模糊匹配
+    - `5xx`: 数据源故障
+    """
+    logger.info(f"板块主力行为查询请求: name='{sector_name}', type='{type}'")
+
+    if not sector_name or not sector_name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="板块名不能为空。",
+        )
+
+    try:
+        fs_type = sector_capital._normalize_fs_type(type)
+    except ValueError as e:
+        logger.warning(f"板块类型非法: type='{type}'")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+    try:
+        matched = await sector_capital.find_sector_action(sector_name, fs_type)
+        if matched is None:
+            logger.warning(f"板块 '{sector_name}' 无匹配 type='{type}'")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"未找到板块 '{sector_name}'（type={fs_type}）。"
+                    f"可调用 /sector/capital 查看全部板块名。"
+                ),
+            )
+
+        return schemas.SectorCapitalActionResponse(
+            query=sector_name,
+            type=fs_type,
+            matched=len(matched),
+            sectors=[schemas.SectorCapitalItem(**s) for s in matched],
+        )
+    except sector_capital.SectorCapitalUnavailable:
+        logger.warning(f"数据源不可用: 板块 '{sector_name}' type='{type}'")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="东方财富数据源暂时不可用，请稍后重试。",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"查询板块 '{sector_name}' 主力行为时发生意外错误")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"查询主力行为时发生内部错误: {str(e)}",
+        )

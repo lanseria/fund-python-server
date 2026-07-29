@@ -31,6 +31,7 @@ src/python_cli_starter/
 ├── fund_fee.py             # 基金手续费信息获取（不依赖 akshare）
 ├── fund_info.py            # 基金完整信息聚合（基本信息+历史净值+费率）
 ├── fund_realtime.py        # 基金实时估值（powercloud 聚合）与昨日净值
+├── sector_capital.py       # 板块主力资金数据（东财资金流向）
 └── strategies/            # 量化策略模块
     ├── __init__.py                # 策略注册表
     ├── rsi_strategy.py            # RSI 策略
@@ -44,7 +45,8 @@ tests/
 ├── test_strategies.py    # 策略单元测试
 ├── test_fund_fee.py     # 基金手续费接口测试
 ├── test_fund_info.py    # 基金完整信息接口测试
-└── test_fund_realtime.py # 基金实时估值与昨日净值接口测试
+├── test_fund_realtime.py # 基金实时估值与昨日净值接口测试
+└── test_sector_capital.py # 板块主力资金接口测试
 ```
 
 ## API 端点
@@ -58,6 +60,8 @@ tests/
 | `GET /fund/info/{fundCode}` | 获取单只基金完整信息（基本信息+历史净值+费率） |
 | `GET /fund/realtime/{fundCode}` | 获取基金盘中实时估值（分钟级，powercloud 聚合） |
 | `GET /fund/nav/{fundCode}` | 获取基金昨日真实净值 |
+| `GET /sector/capital` | 获取板块主力资金数据表（行业/概念，实时） |
+| `GET /sector/capital/action/{sector_name}` | 按板块名查询主力行为（精确+模糊兜底） |
 
 ## 策略说明
 
@@ -213,6 +217,52 @@ tests/
 | `nav` | str | 最新一日单位净值（4 位小数字符串） |
 | `navDate` | str | 净值日期（yyyy-mm-dd） |
 | `growthRate` | float\|null | 日增长率（%） |
+
+## 板块主力资金接口 (`/sector/capital`)
+
+获取板块（行业/概念）的主力资金流向数据，并据此判定主力行为。
+
+- **数据来源**：东方财富板块资金流向接口 `push2.eastmoney.com/api/qt/clist/get`（实时查询，不落库）
+  - `fs=m:90+t:2+f:!50` 行业板块，`fs=m:90+t:3+f:!50` 概念板块
+  - 字段映射（原始单位均为「元」）：`f14` 板块名 / `f3` 涨幅 / `f6` 成交额 / `f62` 主力资金（主力净流入）/ `f66` 超大单 / `f72` 大单 / `f78` 中单 / `f84` 散户资金（小单净流入）
+- **核心模块**：`sector_capital.py`
+  - `get_sector_capital_flow(fs_type)` — 全量板块主力资金表
+  - `find_sector_action(name, fs_type)` — 精确匹配优先，子串模糊兜底，可能返回多条
+- **实时查询**：不做 DB 持久化、不加定时任务（盘中数据需最新，每次请求直连东财）
+
+### 计算口径（业务自定）
+- **主力暗盘** = 主力资金 − 散户资金
+- **主力强度** = 主力暗盘 / 成交额 × 100（成交额为 0 记 0，保留 2 位小数）
+- **主力行为**（按主力强度判定，边界值 `3`/`-1` 归极端档）：
+
+  | 主力强度 | 主力行为 |
+  |---------|---------|
+  | `>= 3` | 抢筹 |
+  | `[1, 3)` | 建仓 |
+  | `[-1, 1)` | 洗盘 |
+  | `<= -1` | 出货 |
+
+- **错误响应**：
+  - `400`：板块类型 `type` 非 `industry|concept`（兼容 `行业`/`概念`/`2`/`3` 别名）；板块名为空
+  - `404`：板块名无任何精确/模糊匹配
+  - `502`：东财数据源不可用
+  - `5xx`：服务故障
+
+### 响应字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | str | 板块名称 |
+| `code` | str | 板块代码（BKxxxx） |
+| `changePercent` | float | 涨幅（%） |
+| `amount` | str | 成交额（亿元字符串，如 `"440.19 亿"`） |
+| `mainCapital` | str | 主力资金（亿元字符串） |
+| `retailCapital` | str | 散户资金（亿元字符串） |
+| `mainHidden` | str | 主力暗盘（亿元字符串） |
+| `mainStrength` | float | 主力强度（%） |
+| `mainAction` | str | 主力行为（抢筹/建仓/洗盘/出货） |
+
+> 两个接口的差异：`/sector/capital` 返回 `{type, count, sectors}` 全量表；`/sector/capital/action/{sector_name}` 返回 `{query, type, matched, sectors}` 命中子集。
 
 ## Docker 部署
 

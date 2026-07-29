@@ -231,6 +231,46 @@ class FundRealtimeEstimation(BaseModel):
     intraday: List[Dict[str, Any]] = []                # 盘中分时数据（非交易时段为空）
 
 
+class SectorCapitalItem(BaseModel):
+    """板块主力资金单项（契约字段，金额均为「亿元」字符串）。
+
+    - **changePercent**: 涨幅（%，如 3.75 表示 +3.75%）
+    - **amount**: 成交额（东财原始 f6，元 → 亿元）
+    - **mainCapital**: 主力资金（主力净流入额 f62）
+    - **retailCapital**: 散户资金（小单净流入额 f84）
+    - **mainHidden**: 主力暗盘 = 主力资金 - 散户资金
+    - **mainStrength**: 主力强度 = 主力暗盘 / 成交额 * 100（%，成交额为 0 记 0）
+    - **mainAction**: 主力行为（抢筹 / 建仓 / 洗盘 / 出货）
+    """
+    name: str                                          # 板块名称
+    code: str = ""                                     # 板块代码（BKxxxx，附带返回）
+    changePercent: float                               # 涨幅（%）
+    amount: str                                        # 成交额（亿元字符串）
+    mainCapital: str                                   # 主力资金（亿元字符串）
+    retailCapital: str                                 # 散户资金（亿元字符串）
+    mainHidden: str                                    # 主力暗盘（亿元字符串）
+    mainStrength: float                                # 主力强度（%）
+    mainAction: str                                    # 主力行为（抢筹/建仓/洗盘/出货）
+
+
+class SectorCapitalListResponse(BaseModel):
+    """板块主力资金表响应（全量板块）。"""
+    type: str                                          # 板块类型（industry / concept）
+    count: int
+    sectors: List[SectorCapitalItem]
+
+
+class SectorCapitalActionResponse(BaseModel):
+    """按板块名查询主力行为响应。
+
+    精确匹配优先，找不到做子串模糊兜底，故 ``matched`` 可能 >1。
+    """
+    query: str                                         # 原始查询串
+    type: str                                          # 板块类型（industry / concept）
+    matched: int                                       # 命中条数
+    sectors: List[SectorCapitalItem]
+
+
 class FundYesterdayNav(BaseModel):
     """基金昨日真实净值响应模型（最近一个交易日官方净值）。
 
