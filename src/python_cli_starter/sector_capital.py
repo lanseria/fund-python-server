@@ -6,11 +6,16 @@
     1. ``get_sector_capital_flow`` — 拉取全量板块（行业/概念）的主力资金表
     2. ``find_sector_action``      — 按板块名查询主力行为（精确优先，模糊兜底）
 
-数据源：东方财富板块资金流向接口
-    ``https://push2.eastmoney.com/api/qt/clist/get``（返回纯 JSON，``fltt=2`` 关闭 JSONP）
+数据源：东方财富数据中心板块资金流向接口
+    ``https://data.eastmoney.com/dataapi/bkzj/getbkzj``
+
+    历史上用过的 ``push2.eastmoney.com/api/qt/clist/get``（实时推送接口）在部分网络
+    环境下不可达（连接被重置），改用同源的 ``data.eastmoney.com/dataapi`` 接口，
+    两者字段命名完全一致（同为东财 f 系列），但后者一次返回全量、无需分页，且走
+    ``data.eastmoney.com`` 域名（更稳定可达）。
 
 字段映射（原始单位均为「元」）：
-    - ``f14`` 板块名 / ``f3`` 涨幅（%）/ ``f6`` 成交额
+    - ``f14`` 板块名 / ``f3`` 涨幅（需 /100，如 217 → 2.17%）/ ``f6`` 成交额
     - ``f62`` 主力资金（主力净流入额）
     - ``f66`` 超大单净流入 / ``f72`` 大单净流入 / ``f78`` 中单净流入
     - ``f84`` 散户资金（小单净流入）
@@ -20,38 +25,36 @@
     - 主力暗盘 = 主力资金 - 散户资金
     - 主力强度 = 主力暗盘 / 成交额 * 100（成交额为 0 记 0）
     - 主力行为（按主力强度判定）：
-        ``>=3`` 抢筹 / ``[1,3)`` 建仓 / ``[-1,1)`` 洗盘 / ``<=-1`` 出货
+        ``>=3`` 抢筹 / ``[1,3)`` 建仓 / ``(-1,1)`` 洗盘 / ``<=-1`` 出货
 
 说明：本模块为实时查询，不落库、不加定时任务（盘中数据需最新）。
 """
 
 import logging
-import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
-# 东财板块资金流向接口
-_BASE_URL = "https://push2.eastmoney.com/api/qt/clist/get"
-_PAGE_SIZE = 200  # 行业 ~86 条、概念 ~410 条，单页 200 + 兜底分页足够
+# 东财数据中心板块资金流向接口（一次返回全量，无需分页）
+_BASE_URL = "https://data.eastmoney.com/dataapi/bkzj/getbkzj"
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
-    "Referer": "https://data.eastmoney.com/bkzj/",
+    "Referer": "https://data.eastmoney.com/bkzj/hy.html",
 }
-# 请求字段：板块代码+名称+最新价+涨幅+成交额+各类资金净流入
+# 请求字段：板块代码+名称+最新价+涨幅+成交额+各类资金净流入（逗号分隔传入 key 参数）
 _FIELDS = "f12,f14,f2,f3,f6,f62,f66,f72,f78,f84,f184"
 _TIMEOUT = 10.0
 
-# 板块类型 → 东财 fs 参数
+# 板块类型 → 东财 code 参数（dataapi 用 code，对应 push2 的 fs）
 _FS_TYPE_MAP = {
-    "industry": "m:90+t:2+f:!50",  # 行业板块
-    "concept": "m:90+t:3+f:!50",  # 概念板块
+    "industry": "m:90+t:2",  # 行业板块（约 496 条）
+    "concept": "m:90+t:3",  # 概念板块（约 504 条）
 }
 
 # 元 → 亿元 的换算
@@ -86,71 +89,53 @@ def _normalize_fs_type(fs_type: Any) -> str:
     return alias[s]
 
 
-async def _fetch_page(
-    client: httpx.AsyncClient, page: int, fs: str
-) -> Tuple[List[Dict[str, Any]], int]:
-    """拉取单页原始数据，返回 (diff 列表, 总条数)。失败返回 ([], 0)。"""
-    params = {
-        "np": "1",
-        "fltt": "2",  # 关闭 JSONP，返回纯 JSON
-        "invt": "2",
-        "fid": "f62",  # 按主力净流入额降序
-        "po": "1",
-        "dect": "1",
-        "fs": fs,
-        "fields": _FIELDS,
-        "pn": str(page),
-        "pz": str(_PAGE_SIZE),
-    }
-    try:
-        resp = await client.get(_BASE_URL, params=params, headers=_HEADERS, timeout=_TIMEOUT)
-    except Exception as e:
-        logger.error(f"[SectorCapital] 第 {page} 页请求异常: {e}")
-        return [], 0
-
-    if resp.status_code != 200:
-        logger.warning(f"[SectorCapital] 第 {page} 页响应非 200: {resp.status_code}")
-        return [], 0
-
-    try:
-        payload = resp.json()
-    except ValueError as e:
-        logger.warning(f"[SectorCapital] 第 {page} 页响应非 JSON: {e}")
-        return [], 0
-
-    data = payload.get("data") or {}
-    total = data.get("total", 0) or 0
-    diff = data.get("diff") or []
-    return diff, total
-
-
 async def _fetch_sector_capital(fs_type: str) -> Optional[List[Dict[str, Any]]]:
-    """分页拉取全量板块原始字典列表。
+    """一次性拉取全量板块原始字典列表（行业/概念）。
+
+    dataapi 接口一次返回全部条目，无需分页。返回结果按东财默认顺序（主力净流入降序）。
 
     :param fs_type: ``industry`` / ``concept``
     :return: 原始 item 列表；数据源不可用返回 None。
     """
-    fs = _FS_TYPE_MAP.get(fs_type)
-    if fs is None:
+    code = _FS_TYPE_MAP.get(fs_type)
+    if code is None:
         return None
 
-    async with httpx.AsyncClient() as client:
-        first_items, total = await _fetch_page(client, 1, fs)
-        if not first_items and total == 0:
-            logger.warning(f"[SectorCapital] 未获取到板块数据 fs_type={fs_type}")
-            return None
+    params = {
+        "key": _FIELDS,  # 指定返回字段（逗号分隔）
+        "code": code,    # 板块分类：行业 m:90+t:2 / 概念 m:90+t:3
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                _BASE_URL, params=params, headers=_HEADERS, timeout=_TIMEOUT
+            )
+    except Exception as e:
+        logger.error(f"[SectorCapital] dataapi 请求异常 fs_type={fs_type}: {e}")
+        return None
 
-        all_items = list(first_items)
-        total_pages = math.ceil(total / _PAGE_SIZE) if total else 1
-        if total_pages > 1:
-            for page in range(2, total_pages + 1):
-                items, _ = await _fetch_page(client, page, fs)
-                all_items.extend(items)
+    if resp.status_code != 200:
+        logger.warning(
+            f"[SectorCapital] dataapi 响应非 200 fs_type={fs_type}: {resp.status_code}"
+        )
+        return None
+
+    try:
+        payload = resp.json()
+    except ValueError as e:
+        logger.warning(f"[SectorCapital] dataapi 响应非 JSON fs_type={fs_type}: {e}")
+        return None
+
+    data = payload.get("data") or {}
+    diff = data.get("diff") or []
+    if not diff:
+        logger.warning(f"[SectorCapital] dataapi 未返回数据 fs_type={fs_type}")
+        return None
 
     logger.info(
-        f"[SectorCapital] fs_type={fs_type} 拉取完成，共 {len(all_items)} 条"
+        f"[SectorCapital] fs_type={fs_type} 拉取完成，共 {len(diff)} 条"
     )
-    return all_items
+    return diff
 
 
 def _to_float(val: Any) -> float:
@@ -184,7 +169,11 @@ def _classify_behavior(strength: float) -> str:
 
 
 def _build_item(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """把单条原始字典映射为对外契约字段（金额转「亿元」字符串）。"""
+    """把单条原始字典映射为对外契约字段（金额转「亿元」字符串）。
+
+    注意：dataapi 接口的 ``f3``（涨幅）为已乘 100 的原始值（如 217 表示 2.17%），
+    故此处统一除以 100；金额类字段（f6/f62/f84 等）单位为元，转「亿元」展示。
+    """
     main_capital = _to_float(raw.get("f62"))  # 主力资金（主力净流入）
     retail_capital = _to_float(raw.get("f84"))  # 散户资金（小单净流入）
     amount = _to_float(raw.get("f6"))  # 成交额
@@ -194,10 +183,13 @@ def _build_item(raw: Dict[str, Any]) -> Dict[str, Any]:
     main_strength = round(main_strength, 2)
     action = _classify_behavior(main_strength)
 
+    # dataapi f3 为乘 100 后的原始值（217 → 2.17%），统一除 100
+    change_percent = round(_to_float(raw.get("f3")) / 100.0, 2)
+
     return {
         "name": str(raw.get("f14", "")).strip(),
         "code": str(raw.get("f12", "")).strip(),  # 板块代码 BKxxxx，附带返回
-        "changePercent": round(_to_float(raw.get("f3")), 2),
+        "changePercent": change_percent,
         "amount": _fmt_yi(amount),
         "mainCapital": _fmt_yi(main_capital),
         "retailCapital": _fmt_yi(retail_capital),

@@ -23,7 +23,7 @@ def _make_raw(
     name: str,
     *,
     code: str = "BK0000",
-    f3: float = 1.0,        # 涨幅 %
+    f3: float = 100.0,      # 涨幅 dataapi 原始值（= 百分比 × 100，如 100 表示 1.00%）
     f6: float = 1e9,        # 成交额（元）= 10 亿
     f62: float = 2e8,       # 主力资金 = 2 亿
     f84: float = -5e7,      # 散户资金 = -0.5 亿
@@ -112,6 +112,16 @@ class TestBuildItem:
         item = sector_capital._build_item(raw)
         assert item["amount"] == "440.00 亿"
 
+    def test_change_percent_divide_by_100(self):
+        """dataapi f3 为乘 100 后的原始值（375 → 3.75%）。"""
+        raw = _make_raw("X", f3=375)
+        item = sector_capital._build_item(raw)
+        assert item["changePercent"] == 3.75
+
+        raw2 = _make_raw("Y", f3=-263)  # -2.63%
+        item2 = sector_capital._build_item(raw2)
+        assert item2["changePercent"] == -2.63
+
 
 class TestNormalizeFsType:
     """板块类型规整 + 别名兼容。"""
@@ -152,8 +162,8 @@ class TestSectorCapitalListAPI:
     @patch("python_cli_starter.sector_capital._fetch_sector_capital", new_callable=AsyncMock)
     def test_list_success(self, mock_fetch):
         mock_fetch.return_value = [
-            _make_raw("食品饮料", code="BK0438", f3=3.75, f6=4.4e10, f62=1.78e9, f84=-6.9e7),
-            _make_raw("被动元件", code="BK1339", f3=2.11, f6=3.12e10, f62=2.59e9, f84=-1.23e9),
+            _make_raw("食品饮料", code="BK0438", f3=375, f6=4.4e10, f62=1.78e9, f84=-6.9e7),
+            _make_raw("被动元件", code="BK1339", f3=211, f6=3.12e10, f62=2.59e9, f84=-1.23e9),
         ]
         r = client.get("/sector/capital?type=industry")
         assert r.status_code == 200
