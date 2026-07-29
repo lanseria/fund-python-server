@@ -127,7 +127,9 @@ uv run pytest tests/test_fund_realtime.py::TestCSVFundRealtime -v
 | `GET /sector/capital` | 获取板块主力资金数据表（`?type=industry` 行业 / `concept` 概念） |
 | `GET /sector/capital/action/{sector_name}` | 按板块名查询主力行为（精确 + 模糊兜底） |
 
-> **板块资金数据源**：东方财富数据中心 `data.eastmoney.com/dataapi/bkzj/getbkzj`（实时查询，不落库）。计算口径：主力暗盘 = 主力资金 − 散户资金；主力强度 = 主力暗盘 / 成交额 × 100；主力行为按强度归类（`>=3` 抢筹 / `[1,3)` 建仓 / `(-1,1)` 洗盘 / `<=-1` 出货）。
+> **板块资金数据源**：东方财富数据中心 `data.eastmoney.com/dataapi/bkzj/getbkzj`。计算口径：主力暗盘 = 主力资金 − 散户资金；主力强度 = 主力暗盘 / 成交额 × 100；主力行为按强度归类（`>=3` 抢筹 / `[1,3)` 建仓 / `(-1,1)` 洗盘 / `<=-1` 出货）。
+>
+> **缓存策略**：内存缓存（不落库）。交易日 9:30-16:00 每 10 分钟刷新一次；16:00 后冻结到次日开盘；服务启动即预热；刷新失败保留旧缓存。两个接口均读缓存。
 
 ### 策略参数说明
 

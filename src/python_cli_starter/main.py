@@ -6,6 +6,8 @@ import inspect
 import re
 from typing import Optional
 import logging
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 from .strategies import STRATEGY_REGISTRY
@@ -22,7 +24,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="基金策略分析 API")
+
+# --- 板块主力资金缓存：后台定时刷新 ---
+_REFRESH_CHECK_INTERVAL = 60  # 每 60 秒检查一次是否需要刷新
+
+
+async def _sector_capital_refresh_loop():
+    """后台循环：每 60 秒检查板块资金缓存是否需要刷新。
+
+    仅在刷新窗口（交易日 9:30-16:00）且距上次刷新满 10 分钟时触发；
+    刷新失败保留旧缓存（仅记日志）。非交易时段/16:00 后不刷新（冻结）。
+    """
+    fs_types = list(sector_capital._FS_TYPE_MAP.keys())
+    while True:
+        try:
+            now = datetime.now()
+            for fs_type in fs_types:
+                async with sector_capital._get_lock():
+                    entry = sector_capital._cache_get(fs_type)
+                    if sector_capital._should_refresh(
+                        entry.get("updated_at") if entry else None, now
+                    ):
+                        await sector_capital._refresh_cache(fs_type, now)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[SectorCapital] 后台刷新循环异常: {e}")
+        await asyncio.sleep(_REFRESH_CHECK_INTERVAL)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期：启动预热缓存 + 后台刷新循环；关闭时取消。"""
+    logger.info("策略分析 API 服务启动")
+    try:
+        await sector_capital.warmup_cache()
+    except Exception as e:
+        logger.error(f"[SectorCapital] 启动预热异常（不阻塞启动）: {e}")
+
+    refresh_task = asyncio.create_task(_sector_capital_refresh_loop())
+    yield
+    refresh_task.cancel()
+    try:
+        await refresh_task
+    except (asyncio.CancelledError, Exception):
+        pass
+    logger.info("策略分析 API 服务关闭")
+
+
+app = FastAPI(title="基金策略分析 API", lifespan=lifespan)
 
 
 @app.exception_handler(RequestValidationError)
