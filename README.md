@@ -1,6 +1,6 @@
 # 基金策略分析 API 服务
 
-基于 FastAPI 构建的基金量化策略分析服务，提供多种技术指标策略（RSI、MACD、布林带、双重确认）的交易信号分析功能，同时支持市场板块数据实时监控。
+基于 FastAPI 构建的基金量化策略分析服务，提供多种技术指标策略（RSI、MACD、布林带、双重确认）的交易信号分析功能，并支持板块主力资金数据查询。
 
 ## ✨ 功能特性
 
@@ -10,16 +10,20 @@
 - **布林带策略**: 反转策略，下轨买入、回归中轨卖出
 - **双重确认策略**: 趋势 + RSI 择时
 
-### 市场数据监控
-- **东方财富板块**: 实时获取行业板块涨跌幅、总市值、换手率、成交额
-- **同花顺板块**: 获取板块涨跌幅、资金净流入、涨跌家数、成交额占比
-- **定时任务**: 交易日交易时段每 15 分钟自动更新数据
-- **前端面板**: 内置 Vue 3 + Tailwind CSS 实时监控页面
+### 基金数据
+- **基金完整信息**: 一次拿全基本信息 + 历史净值 + 费率表
+- **实时估值**: 盘中分钟级估算净值（powercloud 聚合）
+- **昨日净值**: 最近一个交易日官方净值
+- **手续费**: 7 类费率信息（申购/赎回/运作/认购等）
+
+### 板块主力资金
+- **板块资金表**: 全量行业/概念板块的主力资金、散户资金、成交额
+- **主力行为判定**: 按主力强度自动归类为抢筹 / 建仓 / 洗盘 / 出货
+- **按名查询**: 通过板块名查询主力行为（精确 + 模糊兜底）
 
 ### 其他功能
 - **RESTful API**: 简洁的 API 设计，易于集成
 - **数据源**: 使用 AkShare 获取基金净值数据
-- **数据库**: PostgreSQL 存储板块历史数据
 - **Docker 支持**: 多阶段构建优化，支持容器化部署
 - **图表数据**: 提供 RSI 策略历史图表数据用于前端可视化
 
@@ -29,10 +33,7 @@
 - **数据验证**: Pydantic >=2.11.4
 - **数据处理**: Pandas >=2.0.0, NumPy >=2.0.2
 - **数据源**: AkShare >=1.17.87
-- **异步**: HTTPX >=0.27.0
-- **浏览器自动化**: Playwright >=1.41.0
-- **数据库**: SQLAlchemy >=2.0.0, asyncpg >=0.29.0, Alembic >=1.18.4
-- **定时任务**: APScheduler >=3.10.4
+- **异步 HTTP**: HTTPX >=0.27.0
 - **包管理**: uv
 - **测试框架**: Pytest >=8.0.0
 
@@ -44,15 +45,11 @@
 # 安装依赖
 uv sync
 
-# 数据库迁移
-uv run alembic upgrade head
-
 # 启动服务
 uvicorn src.python_cli_starter.main:app --reload
 ```
 
 服务启动后访问：
-- 监控面板: `http://localhost:8000/`
 - API 文档: `http://localhost:8000/docs`
 
 ### 运行测试
@@ -84,8 +81,9 @@ uv run pytest tests/test_fund_realtime.py::TestCSVFundRealtime -v
 | `tests/test_fund_fee.py` | 基金手续费接口（`/funds/{code}/fee`） |
 | `tests/test_fund_info.py` | 基金完整信息接口（`/fund/info/{code}`） |
 | `tests/test_fund_realtime.py` | 实时估值与昨日净值接口（`/fund/realtime/{code}`、`/fund/nav/{code}`） |
+| `tests/test_sector_capital.py` | 板块主力资金接口（`/sector/capital`、`/sector/capital/action/{name}`） |
 
-所有测试均通过 mock `akshare` 注入伪造数据，**不依赖网络**，可离线稳定运行。
+所有测试均通过 mock 注入伪造数据，**不依赖网络**，可离线稳定运行。
 
 ### 测试数据源
 
@@ -96,11 +94,6 @@ uv run pytest tests/test_fund_realtime.py::TestCSVFundRealtime -v
 - **增删基金无需改测试代码**：向 `test_funds.csv` 增删行后，参数化用例会自动跟随
 
 ## 📡 API 端点
-
-### Dashboard
-| 端点 | 方法 | 功能 |
-|------|------|------|
-| `GET /` | 板块监控前端面板 |
 
 ### System
 | 端点 | 方法 | 功能 |
@@ -118,15 +111,6 @@ uv run pytest tests/test_fund_realtime.py::TestCSVFundRealtime -v
 |------|------|------|
 | `GET /charts/rsi/{fund_code}` | 获取 RSI 策略图表数据 |
 
-### Market
-| 端点 | 方法 | 功能 |
-|------|------|------|
-| `GET /market/df_sectors` | 获取东方财富行业板块数据 |
-| `GET /market/ths_sectors` | 获取同花顺行业板块数据 |
-| `GET /market/sector_names` | 获取两家数据源的板块名称列表 |
-| `POST /market/fetch/eastmoney` | 手动触发获取东方财富板块数据 |
-| `POST /market/upload/eastmoney` | 手动上传东方财富JSONP数据 |
-
 ### Fund
 | 端点 | 方法 | 功能 |
 |------|------|------|
@@ -136,6 +120,14 @@ uv run pytest tests/test_fund_realtime.py::TestCSVFundRealtime -v
 | `GET /fund/nav/{fundCode}` | 获取基金昨日真实净值 |
 
 > **实时估值数据源**：powercloud 聚合接口（已封装东财实时估算 + 历史净值回退 + QDII 处理）。`estimateNav` 取东财原值 `gsz`；`quoteSource`/`message` 标识数据状态；`intraday` 返回盘中分时数据（非交易时段为空）。QDII/货币型等无盘中估值的基金自动回退到最近净值。
+
+### SectorCapital（板块主力资金）
+| 端点 | 方法 | 功能 |
+|------|------|------|
+| `GET /sector/capital` | 获取板块主力资金数据表（`?type=industry` 行业 / `concept` 概念） |
+| `GET /sector/capital/action/{sector_name}` | 按板块名查询主力行为（精确 + 模糊兜底） |
+
+> **板块资金数据源**：东方财富数据中心 `data.eastmoney.com/dataapi/bkzj/getbkzj`（实时查询，不落库）。计算口径：主力暗盘 = 主力资金 − 散户资金；主力强度 = 主力暗盘 / 成交额 × 100；主力行为按强度归类（`>=3` 抢筹 / `[1,3)` 建仓 / `(-1,1)` 洗盘 / `<=-1` 出货）。
 
 ### 策略参数说明
 
@@ -157,6 +149,12 @@ curl http://localhost:8000/strategies/bollinger_bands/161725?is_holding=true
 
 # 双重确认策略
 curl http://localhost:8000/strategies/dual_confirmation/161725?is_holding=false
+
+# 板块主力资金（行业）
+curl http://localhost:8000/sector/capital?type=industry
+
+# 按板块名查主力行为
+curl http://localhost:8000/sector/capital/action/食品饮料
 ```
 
 ## 📊 响应格式
@@ -176,28 +174,6 @@ curl http://localhost:8000/strategies/dual_confirmation/161725?is_holding=false
     "rsi_lower_band": 30.0
   }
 }
-```
-
-## 🗄️ 数据库配置
-
-项目使用 PostgreSQL 数据库，通过环境变量配置连接：
-
-```bash
-# .env 文件示例
-DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/fund_db
-```
-
-### Alembic 迁移命令
-
-```bash
-# 创建迁移
-uv run alembic revision --autogenerate -m "描述信息"
-
-# 执行迁移
-uv run alembic upgrade head
-
-# 回滚迁移
-uv run alembic downgrade -1
 ```
 
 ## 🐳 Docker 部署

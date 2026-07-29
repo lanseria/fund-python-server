@@ -1,6 +1,6 @@
 ## 项目概览
 
-基金策略分析 API 服务，基于 FastAPI 构建。提供多种量化技术指标策略（RSI、MACD、布林带、双重确认）的基金交易信号分析。
+基金策略分析 API 服务，基于 FastAPI 构建。提供多种量化技术指标策略（RSI、MACD、布林带、双重确认）的基金交易信号分析，并支持板块主力资金数据查询。
 
 ## 常用命令
 
@@ -18,8 +18,8 @@ uv run pytest tests/ -k test_rsi -v    # 运行特定测试
 
 # Docker 部署
 docker compose up -d                    # 启动服务
-docker compose logs -f                     # 查看日志
-docker compose down                      # 停止服务
+docker compose logs -f                  # 查看日志
+docker compose down                     # 停止服务
 ```
 
 ## 代码架构
@@ -31,8 +31,8 @@ src/python_cli_starter/
 ├── fund_fee.py             # 基金手续费信息获取（不依赖 akshare）
 ├── fund_info.py            # 基金完整信息聚合（基本信息+历史净值+费率）
 ├── fund_realtime.py        # 基金实时估值（powercloud 聚合）与昨日净值
-├── sector_capital.py       # 板块主力资金数据（东财资金流向）
-└── strategies/            # 量化策略模块
+├── sector_capital.py       # 板块主力资金数据（东财数据中心）
+└── strategies/             # 量化策略模块
     ├── __init__.py                # 策略注册表
     ├── rsi_strategy.py            # RSI 策略
     ├── macd_strategy.py           # MACD 趋势策略
@@ -42,7 +42,8 @@ src/python_cli_starter/
 tests/
 ├── conftest.py          # pytest 配置
 ├── test_api.py          # API 集成测试
-├── test_strategies.py    # 策略单元测试
+├── test_charts.py       # RSI 图表数据接口测试
+├── test_strategies.py   # 策略单元测试
 ├── test_fund_fee.py     # 基金手续费接口测试
 ├── test_fund_info.py    # 基金完整信息接口测试
 ├── test_fund_realtime.py # 基金实时估值与昨日净值接口测试
@@ -56,6 +57,7 @@ tests/
 | `GET /health` | 健康检查 |
 | `GET /strategies` | 获取所有可用策略列表 |
 | `GET /strategies/{strategy_name}/{fund_code}` | 执行指定策略分析 |
+| `GET /charts/rsi/{fund_code}` | 获取 RSI 策略图表数据 |
 | `GET /funds/{fund_code}/fee` | 获取基金手续费信息 |
 | `GET /fund/info/{fundCode}` | 获取单只基金完整信息（基本信息+历史净值+费率） |
 | `GET /fund/realtime/{fundCode}` | 获取基金盘中实时估值（分钟级，powercloud 聚合） |
@@ -195,8 +197,6 @@ tests/
 | `message` | str | 状态说明（如「QDII暂无盘中估值，展示最近净值」） |
 | `intraday` | list | 盘中分时数据 `[{time, value, ...}]`，非交易时段为空数组 |
 
-> 行为变化（2026-07）：数据源从新浪单只接口改为 powercloud 聚合接口。收益：估算净值用原值（`gsz`，非反算）、恢复 `publishedNav` 官方净值填充、新增 `intraday` 分时数据与 `quoteSource`/`message` 状态标识。代价：强依赖外部 powercloud 服务（它宕机则实时估值不可用，返回 404）。
-
 ## 基金昨日净值接口 (`/fund/nav/{fundCode}`)
 
 获取单只基金最近一个交易日的官方单位净值（昨日真实净值）。
@@ -240,7 +240,7 @@ tests/
   |---------|---------|
   | `>= 3` | 抢筹 |
   | `[1, 3)` | 建仓 |
-  | `[-1, 1)` | 洗盘 |
+  | `(-1, 1)` | 洗盘 |
   | `<= -1` | 出货 |
 
 - **错误响应**：
@@ -289,4 +289,5 @@ docker compose down
 - Pydantic >=2.11.4
 - Pandas >=2.0.0
 - AkShare >=1.17.87
+- HTTPX >=0.27.0
 - Pytest >=8.0.0 (测试)

@@ -2,8 +2,6 @@ services:
   fund_strategies_service:
     build: .
     container_name: fund_strategies_service
-    env_file:
-      - .env
     ports:
       - "8800:8800"
     command: >
