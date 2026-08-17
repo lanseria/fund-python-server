@@ -119,7 +119,7 @@ uv run pytest tests/test_fund_realtime.py::TestCSVFundRealtime -v
 | `GET /fund/realtime/{fundCode}` | 获取基金盘中实时估值（分钟级，powercloud 聚合） |
 | `GET /fund/nav/{fundCode}` | 获取基金昨日真实净值 |
 
-> **实时估值数据源**：powercloud 聚合接口（已封装东财实时估算 + 历史净值回退 + QDII 处理）。`estimateNav` 取东财原值 `gsz`；`quoteSource`/`message` 标识数据状态；`intraday` 返回盘中分时数据（非交易时段为空）。QDII/货币型等无盘中估值的基金自动回退到最近净值。
+> **实时估值数据源**：powercloud 聚合接口（已封装东财实时估算 + 历史净值回退 + QDII 处理）。`estimateNav` 取东财原值 `gsz`；`quoteSource`/`message` 标识数据状态；`intraday` 返回盘中分时数据（非交易时段为空）；`holdingsDate`/`holdings` 返回重仓股持仓明细（`pct` 为占净值比例，季报口径，无股票持仓为空数组）。QDII/货币型等无盘中估值的基金自动回退到最近净值。
 
 ### SectorCapital（板块主力资金）
 | 端点 | 方法 | 功能 |

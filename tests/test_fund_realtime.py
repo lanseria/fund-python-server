@@ -55,10 +55,13 @@ def _make_powercloud_payload(
     message: str = "",
     success: bool = True,
     intraday=None,
+    holdings_date: str = "",
+    holdings=None,
 ) -> dict:
     """构造 ``_fetch_powercloud_estimation`` 的返回（已解析字典）。
 
     字段命名对齐 powercloud ``basic`` 的东财原始命名（gsz/gszzl/dwjz 等）。
+    ``holdings`` 为解析后的 ``{date, stocks}`` 结构。
     """
     return {
         "basic": {
@@ -77,6 +80,10 @@ def _make_powercloud_payload(
             "success": success,
         },
         "intraday": list(intraday) if intraday else [],
+        "holdings": {
+            "date": holdings_date,
+            "stocks": list(holdings) if holdings else [],
+        },
     }
 
 
@@ -129,6 +136,9 @@ class TestRealtimeAPI:
         # 状态标识透传
         assert data["quoteSource"] == "realtime"
         assert data["intraday"] == []
+        # holdings 默认空（mock 未注入持仓）
+        assert data["holdingsDate"] == ""
+        assert data["holdings"] == []
 
     @patch("python_cli_starter.fund_realtime._fetch_powercloud_estimation")
     def test_realtime_published_nav_present(self, mock_pc):
@@ -203,6 +213,30 @@ class TestRealtimeAPI:
         assert data["intraday"][0] == {"time": "09:30", "value": 0.5395}
 
     @patch("python_cli_starter.fund_realtime._fetch_powercloud_estimation")
+    def test_realtime_holdings_present(self, mock_pc):
+        """测试重仓股持仓明细透传（holdingsDate + holdings）"""
+        holdings = [
+            {"code": "600519", "name": "贵州茅台", "pct": "17.28%",
+             "price": "1285.18", "change_pct": "-4.23", "delta": "-",
+             "quote_date": "2026-08-17", "quote_time": "11:30:00"},
+            {"code": "600809", "name": "山西汾酒", "pct": "15.19%",
+             "price": "118.52", "change_pct": "-4.05", "delta": "-",
+             "quote_date": "2026-08-17", "quote_time": "11:30:00"},
+        ]
+        mock_pc.return_value = _make_powercloud_payload(
+            "161725", "招商中证白酒指数(LOF)A",
+            gsz="0.5292", gszzl="-1.91", dwjz="0.5395",
+            holdings_date="2026-06-30", holdings=holdings,
+        )
+
+        response = client.get("/fund/realtime/161725")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["holdingsDate"] == "2026-06-30"
+        assert data["holdings"] == holdings
+        assert data["holdings"][0]["pct"] == "17.28%"  # 占净值比例原样透传
+
+    @patch("python_cli_starter.fund_realtime._fetch_powercloud_estimation")
     def test_realtime_source_unavailable_404(self, mock_pc):
         """测试数据源返回 None 返回 404"""
         mock_pc.return_value = None
@@ -237,6 +271,13 @@ class TestPowercloudParsing:
                 "quote_source": "realtime", "message": "", "success": True,
             },
             "intraday": {"data": [{"time": "09:30", "value": 0.5395}], "success": True},
+            "holdings": {
+                "date": "2026-06-30",
+                "holdings": [
+                    {"code": "600519", "name": "贵州茅台", "pct": "17.28%",
+                     "price": "1285.18", "change_pct": "-4.23"},
+                ],
+            },
         }
         mock_get.return_value = mock_resp
 
@@ -245,6 +286,31 @@ class TestPowercloudParsing:
         assert result["basic"]["name"] == "招商中证白酒指数(LOF)A"
         assert result["basic"]["gsz"] == "0.5292"
         assert len(result["intraday"]) == 1
+        # holdings 原始结构转换为 {date, stocks}
+        assert result["holdings"]["date"] == "2026-06-30"
+        assert result["holdings"]["stocks"][0]["code"] == "600519"
+        assert result["holdings"]["stocks"][0]["pct"] == "17.28%"
+
+    @patch("python_cli_starter.fund_realtime.requests.get")
+    def test_powercloud_holdings_missing_defaults_empty(self, mock_get):
+        """测试 powercloud 无 holdings 字段（纯债/货币等）时默认为空"""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "basic": {
+                "code": "000198", "name": "天弘安康颐养混合",
+                "gsz": "1.5", "gszzl": "0.1", "dwjz": "1.5",
+                "jzrq": "2026-07-24", "gztime": "2026-07-27",
+                "confirmed_nav": "", "confirmed_change": "",
+                "quote_source": "realtime", "message": "", "success": True,
+            },
+            "intraday": {"data": [], "success": True},
+        }
+        mock_get.return_value = mock_resp
+
+        result = fund_realtime._fetch_powercloud_estimation("000198")
+        assert result is not None
+        assert result["holdings"] == {"date": "", "stocks": []}
 
     @patch("python_cli_starter.fund_realtime.requests.get")
     def test_powercloud_empty_name_returns_none(self, mock_get):

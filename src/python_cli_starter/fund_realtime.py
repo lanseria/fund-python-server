@@ -20,8 +20,9 @@
       ``hq.sinajs.cn``（估算净值需反算）。现统一收敛到 powercloud。
     - powercloud 对非 6 位代码（如 5 位）可能误匹配，故代码格式校验（6 位数字）
       由调用方（API 路由层）保证，先于数据源调用。
-    - powercloud 额外返回 ``intraday``（盘中分时）、``history``、``holdings``，
-      本模块仅透传 ``intraday`` 分时数据（非交易时段为空数组）。
+    - powercloud 额外返回 ``intraday``（盘中分时）、``history``、``holdings``
+      （重仓股持仓，季报口径），本模块透传 ``intraday`` 与 ``holdings``；
+      ``history`` 不透传（历史净值由 /fund/info 接口提供）。
 """
 
 import logging
@@ -67,7 +68,7 @@ def _to_float(value: Any) -> Optional[float]:
 
 def _fetch_powercloud_estimation(fund_code: str) -> Optional[Dict[str, Any]]:
     """
-    请求 powercloud 聚合接口并解析 ``basic`` + ``intraday``。
+    请求 powercloud 聚合接口并解析 ``basic`` + ``intraday`` + ``holdings``。
 
     powercloud ``basic`` 关键字段（东财原始命名）：
         - ``gsz``      盘中估算净值（实时估算时为当前估值；非交易时段/QDII 回退到最近净值）
@@ -83,7 +84,14 @@ def _fetch_powercloud_estimation(fund_code: str) -> Optional[Dict[str, Any]]:
         - ``quote_source`` 数据来源标识（``realtime`` / ``history_fallback`` 等）
         - ``message``  状态说明
 
-    :return: 含 ``basic`` / ``intraday`` 的字典；请求失败或无数据返回 None。
+    powercloud ``holdings`` 关键字段（重仓股持仓，季报口径）：
+        - ``date``      持仓报告期（如 ``2026-06-30``，季报披露日）
+        - ``holdings``  持仓明细列表，条目含 ``code`` 股票代码 / ``name`` 股票名 /
+          ``pct`` 占净值比例（字符串如 ``"17.28%"``）/ ``price`` 最新价 /
+          ``change_pct`` 当日涨跌幅 / ``quote_date``+``quote_time`` 行情时间
+
+    :return: 含 ``basic`` / ``intraday`` / ``holdings`` 的字典（holdings 为
+             ``{date, stocks}`` 结构）；请求失败或无数据返回 None。
     """
     fund_code = str(fund_code)
     url = _POWERCLOUD_URL_TPL.format(code=fund_code)
@@ -121,9 +129,15 @@ def _fetch_powercloud_estimation(fund_code: str) -> Optional[Dict[str, Any]]:
         return None
 
     intraday = payload.get("intraday") or {}
+    holdings = payload.get("holdings") or {}
     return {
         "basic": basic,
         "intraday": list(intraday.get("data") or []),
+        # 内层列表由 holdings 重命名为 stocks，避免对外的 holdings.stocks 嵌套重复
+        "holdings": {
+            "date": str(holdings.get("date", "")).strip(),
+            "stocks": list(holdings.get("holdings") or []),
+        },
     }
 
 
@@ -152,6 +166,10 @@ def _build_from_powercloud(fund_code: str, data: Dict[str, Any]) -> Dict[str, An
         "message": str(basic.get("message", "")).strip(),
         # 新增：盘中分时数据（非交易时段/QDII 为空数组）
         "intraday": list(data.get("intraday") or []),
+        # 新增：重仓股持仓（季报口径，pct 为占净值比例字符串如 "17.28%"；
+        # 纯债/货币等无股票持仓的基金为空列表）
+        "holdingsDate": str((data.get("holdings") or {}).get("date", "")).strip(),
+        "holdings": list((data.get("holdings") or {}).get("stocks") or []),
     }
 
 
@@ -164,7 +182,8 @@ def get_realtime_estimation(fund_code: str) -> Optional[Dict[str, Any]]:
     :param fund_code: 基金代码（调用方需保证为合法 6 位代码）
     :return: 契约结构字典；数据源不可用或基金不存在返回 None。
              ``quoteSource``/``message`` 标识数据状态；``intraday`` 为盘中分时
-             （非交易时段为空数组）。
+             （非交易时段为空数组）；``holdings``/``holdingsDate`` 为重仓股
+             持仓明细与报告期（季报口径，无股票持仓为空列表/空串）。
     """
     fund_code = str(fund_code)
     data = _fetch_powercloud_estimation(fund_code)

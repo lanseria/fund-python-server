@@ -353,10 +353,14 @@ def get_fund_realtime_api(fundCode: str):
     - **quoteSource**: 数据来源标识（`realtime` / `history_fallback`）
     - **message**: 状态说明（如「QDII暂无盘中估值」）
     - **intraday**: 盘中分时数据（非交易时段为空数组）
+    - **holdingsDate**: 重仓股持仓报告期（季报日期，如 `2026-06-30`）
+    - **holdings**: 重仓股持仓明细（`{code, name, pct, price, change_pct, ...}`，
+      `pct` 为占净值比例，如 `"17.28%"`；纯债/货币等无股票持仓为空数组）
 
     说明：
     - QDII / 货币型等无盘中估值的基金，会回退到最近净值，通过 `quoteSource`/`message` 标识。
     - `publishedNav` 在官方净值未确认时为 null。
+    - `holdings` 为季报披露口径（占净值比例），存在季报滞后；行情字段为最新盘中值。
 
     错误响应：
     - `400`: 基金代码格式错误（非 6 位数字）

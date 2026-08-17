@@ -173,6 +173,7 @@ tests/
   - `success` / `quote_source` / `message` 标识数据状态：`realtime`（盘中实时估算）vs `history_fallback`（非交易时段/QDII 回退到最近净值）
   - QDII（T+2 净值）/ 货币型 等无盘中估值的基金，powercloud 自动回退到最近净值并标注（不再返回 404）
   - 占位符（`-` / `---` / 空）统一转为 `null`
+  - powercloud 额外返回的 `holdings`（重仓股持仓）已透传为顶层 `holdingsDate` + `holdings`；内层明细列表由原始的 `holdings` 重命名为 `stocks` 参与解析；`history` 不透传（历史净值由 `/fund/info` 提供）
   - powercloud 对非 6 位代码（如 5 位）可能误匹配，故代码格式校验（6 位数字）由 API 路由层保证，先于数据源调用
   - 历史演进：东财 `fundgz` JSONP（已废弃）→ akshare 东财估值表（底层接口失效）→ 新浪单只（估算净值需反算）→ powercloud 聚合（当前）
 - **错误响应**：
@@ -196,6 +197,8 @@ tests/
 | `quoteSource` | str\|null | 数据来源标识（`realtime` / `history_fallback`） |
 | `message` | str | 状态说明（如「QDII暂无盘中估值，展示最近净值」） |
 | `intraday` | list | 盘中分时数据 `[{time, value, ...}]`，非交易时段为空数组 |
+| `holdingsDate` | str | 重仓股持仓报告期（季报日期，如 `"2026-06-30"`，无持仓为空串） |
+| `holdings` | list | 重仓股持仓明细 `[{code, name, pct, price, change_pct, ...}]`；`pct` 为占净值比例字符串（如 `"17.28%"`，季报口径有滞后），`price`/`change_pct` 为最新盘中行情；纯债/货币等无股票持仓为空数组 |
 
 ## 基金昨日净值接口 (`/fund/nav/{fundCode}`)
 

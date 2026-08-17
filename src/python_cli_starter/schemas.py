@@ -132,9 +132,13 @@ class FundRealtimeEstimation(BaseModel):
     - **quoteSource**: 数据来源标识（``realtime`` 盘中实时 / ``history_fallback`` 历史回退）
     - **message**: 状态说明（如「QDII暂无盘中估值，展示最近净值」）
     - **intraday**: 盘中分时数据（``[{time, value, ...}]``，非交易时段为空数组）
+    - **holdingsDate**: 重仓股持仓报告期（季报日期，如 ``2026-06-30``）
+    - **holdings**: 重仓股持仓明细（``[{code, name, pct, price, change_pct, ...}]``，
+      ``pct`` 为占净值比例字符串如 ``"17.28%"``；纯债/货币等无股票持仓为空数组）
 
     注意：QDII / 货币型等无盘中估值的基金，``success`` 为 False 时会回退到最近净值，
-    通过 ``quoteSource`` / ``message`` 标识。
+    通过 ``quoteSource`` / ``message`` 标识。``holdings`` 为季报披露口径，
+    存在季报滞后（报告期见 ``holdingsDate``），行情字段（price/change_pct）为最新盘中值。
     """
     code: str
     name: str
@@ -148,6 +152,8 @@ class FundRealtimeEstimation(BaseModel):
     quoteSource: Optional[str] = None                  # 数据来源标识
     message: str = ""                                  # 状态说明
     intraday: List[Dict[str, Any]] = []                # 盘中分时数据（非交易时段为空）
+    holdingsDate: str = ""                             # 重仓股持仓报告期（季报日期）
+    holdings: List[Dict[str, Any]] = []                # 重仓股持仓明细（无股票持仓为空）
 
 
 class SectorCapitalItem(BaseModel):
