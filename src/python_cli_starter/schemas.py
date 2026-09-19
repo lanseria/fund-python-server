@@ -207,3 +207,27 @@ class FundYesterdayNav(BaseModel):
     nav: str                                           # 最新一日单位净值（4 位小数字符串）
     navDate: str                                       # 净值日期（yyyy-mm-dd）
     growthRate: Optional[float] = None                 # 日增长率（%）
+
+
+class StockRealtimeItem(BaseModel):
+    """股票实时行情单项（供基金自算估值加权使用）。
+
+    数据来源：东财 push2 批量行情接口（``ulist.np/get``）。
+    """
+    code: str                                          # 股票代码（6 位）
+    name: str = ""                                     # 股票名称
+    price: Optional[float] = None                      # 最新价（停牌/无行情为 None）
+    changePct: Optional[float] = None                  # 当日涨跌幅（%，停牌/无行情为 None）
+    date: str = ""                                     # 行情日期（yyyy-mm-dd，北京时间）
+    time: str = ""                                     # 行情时间（HH:mm:ss，北京时间）
+
+
+class StockRealtimeResponse(BaseModel):
+    """股票批量实时行情响应。
+
+    ``stocks`` 为成功获取的行情；``missing`` 为不支持的市场（北交所/港美股）、
+    格式非法或上游拉取失败的代码，调用方（Nuxt 端自算估值）按缺失权重剔除。
+    """
+    count: int                                         # stocks 条数
+    stocks: List[StockRealtimeItem]
+    missing: List[str] = []

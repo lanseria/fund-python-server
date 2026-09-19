@@ -17,6 +17,7 @@ from . import fund_fee
 from . import fund_info
 from . import fund_realtime
 from . import sector_capital
+from . import stock_realtime
 
 # 日志配置
 logging.basicConfig(
@@ -596,4 +597,63 @@ async def get_sector_capital_action(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"查询主力行为时发生内部错误: {str(e)}",
+        )
+
+
+@app.get(
+    "/stocks/realtime",
+    response_model=schemas.StockRealtimeResponse,
+    summary="批量获取股票实时行情",
+    tags=["Stock"],
+)
+def get_stocks_realtime_api(
+    codes: str = Query(
+        ...,
+        description="逗号分隔的 6 位股票代码，如 `600519,000858`（上限 200 只）",
+    ),
+):
+    """
+    批量获取多只 A 股股票的实时最新价与当日涨跌幅（供基金自算估值加权）。
+
+    数据来源：东财 push2 批量行情接口，进程内 60 秒 TTL 缓存
+    （按单只股票粒度，批量请求间自动去重）。
+
+    - **stocks**: 成功获取的行情 `{code, name, price, changePct, date, time}`
+      （停牌股 price/changePct 为 null，行情时间为北京时间）
+    - **missing**: 不支持的市场（北交所/港美股）、非法代码或拉取失败的代码，
+      调用方按缺失权重剔除
+
+    错误响应：
+    - `400`: codes 参数缺失/为空、含非 6 位数字代码，或超过 200 只
+    """
+    logger.info(f"股票批量行情查询请求: codes='{codes[:200]}'")
+
+    code_list = [c.strip() for c in str(codes).split(",") if c.strip()]
+    if not code_list:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="codes 参数不能为空，格式如 codes=600519,000858。",
+        )
+
+    invalid = [c for c in code_list if not re.match(r"^\d{6}$", c)]
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"股票代码格式错误（需为 6 位数字）：{invalid[:5]}",
+        )
+
+    if len(code_list) > stock_realtime._MAX_CODES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"单次最多查询 {stock_realtime._MAX_CODES} 只股票，当前 {len(code_list)} 只。",
+        )
+
+    try:
+        result = stock_realtime.get_stocks_realtime(code_list)
+        return schemas.StockRealtimeResponse(count=len(result["stocks"]), **result)
+    except Exception as e:
+        logger.exception("批量获取股票行情时发生意外错误")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取股票行情时发生内部错误: {str(e)}",
         )
