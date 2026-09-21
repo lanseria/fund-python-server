@@ -609,22 +609,23 @@ async def get_sector_capital_action(
 def get_stocks_realtime_api(
     codes: str = Query(
         ...,
-        description="逗号分隔的 6 位股票代码，如 `600519,000858`（上限 200 只）",
+        description="逗号分隔的股票代码（A股 6 位/港股 5 位），如 `600519,000858,00700`（上限 200 只）",
     ),
 ):
     """
-    批量获取多只 A 股股票的实时最新价与当日涨跌幅（供基金自算估值加权）。
+    批量获取多只 A 股/港股股票的实时最新价与当日涨跌幅（供基金自算估值加权）。
 
-    数据来源：东财 push2 批量行情接口，进程内 60 秒 TTL 缓存
-    （按单只股票粒度，批量请求间自动去重）。
+    数据来源：腾讯行情批量接口，进程内 60 秒 TTL 缓存
+    （按单只股票粒度，批量请求间自动去重）。港股代码为 5 位数字
+    （powercloud 重仓口径，如 00700），行情时间仍为北京时间。
 
     - **stocks**: 成功获取的行情 `{code, name, price, changePct, date, time}`
       （停牌股 price/changePct 为 null，行情时间为北京时间）
-    - **missing**: 不支持的市场（北交所/港美股）、非法代码或拉取失败的代码，
+    - **missing**: 不支持的市场（北交所/美股）、非法代码或拉取失败的代码，
       调用方按缺失权重剔除
 
     错误响应：
-    - `400`: codes 参数缺失/为空、含非 6 位数字代码，或超过 200 只
+    - `400`: codes 参数缺失/为空、含非 5-6 位数字代码，或超过 200 只
     """
     logger.info(f"股票批量行情查询请求: codes='{codes[:200]}'")
 
@@ -635,11 +636,11 @@ def get_stocks_realtime_api(
             detail="codes 参数不能为空，格式如 codes=600519,000858。",
         )
 
-    invalid = [c for c in code_list if not re.match(r"^\d{6}$", c)]
+    invalid = [c for c in code_list if not re.match(r"^\d{5,6}$", c)]
     if invalid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"股票代码格式错误（需为 6 位数字）：{invalid[:5]}",
+            detail=f"股票代码格式错误（A股 6 位/港股 5 位数字）：{invalid[:5]}",
         )
 
     if len(code_list) > stock_realtime._MAX_CODES:

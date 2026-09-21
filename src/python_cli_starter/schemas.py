@@ -212,9 +212,10 @@ class FundYesterdayNav(BaseModel):
 class StockRealtimeItem(BaseModel):
     """股票实时行情单项（供基金自算估值加权使用）。
 
-    数据来源：东财 push2 批量行情接口（``ulist.np/get``）。
+    数据来源：腾讯行情批量接口（A股 ``sh``/``sz`` 前缀、港股 ``hk`` 前缀）。
     """
-    code: str                                          # 股票代码（6 位）
+
+    code: str                                          # 股票代码（A股 6 位/港股 5 位）
     name: str = ""                                     # 股票名称
     price: Optional[float] = None                      # 最新价（停牌/无行情为 None）
     changePct: Optional[float] = None                  # 当日涨跌幅（%，停牌/无行情为 None）
@@ -225,7 +226,7 @@ class StockRealtimeItem(BaseModel):
 class StockRealtimeResponse(BaseModel):
     """股票批量实时行情响应。
 
-    ``stocks`` 为成功获取的行情；``missing`` 为不支持的市场（北交所/港美股）、
+    ``stocks`` 为成功获取的行情；``missing`` 为不支持的市场（北交所/美股）、
     格式非法或上游拉取失败的代码，调用方（Nuxt 端自算估值）按缺失权重剔除。
     """
     count: int                                         # stocks 条数

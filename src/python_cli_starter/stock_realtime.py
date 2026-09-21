@@ -6,15 +6,19 @@
 A 股实时最新价与当日涨跌幅，供 Nuxt 端按持仓占比加权估算基金净值。
 
 数据源：
-    腾讯行情 ``qt.gtimg.cn/q=sh600519,sz000858,...``（GBK 编码文本，
+    腾讯行情 ``qt.gtimg.cn/q=sh600519,sz000858,hk00700,...``（GBK 编码文本，
     ``~`` 分隔；字段位置与 Nuxt 端 dataFetcher 对指数/LOF 的解析一致：
     parts[1] 名称 / parts[2] 代码 / parts[3] 最新价 / parts[30] 时间
-    YYYYMMDDHHmmss / parts[32] 涨跌幅%）。
-    不用东财 push2：其对部分网络环境（IPv6/TLS 指纹）会直接断连，腾讯源更稳。
+    / parts[32] 涨跌幅%）。A 股时间为 YYYYMMDDHHmmss 紧凑数字，
+    港股为 ``2026/09/21 14:19:48`` 斜杠格式，均由 ``_format_quote_time``
+    去非数字后统一解析。不用东财 push2：其对部分网络环境（IPv6/TLS
+    指纹）会直接断连，腾讯源更稳。
 
 实现要点：
-    - 市场前缀规则：6 开头 → ``sh{code}``，0/3 开头 → ``sz{code}``；
-      其余（北交所 4/8 开头、港股 hk、美股等）不支持，归入 ``missing``
+    - 市场前缀规则：5 位数字 → 港股 ``hk{code}``（powercloud 重仓口径的
+      港股代码为 5 位，如 00700/01810，腾讯行情以 hk 前缀区分，港股字段
+      位置与 A 股一致）；6 开头 → ``sh{code}``，0/3 开头 → ``sz{code}``；
+      其余（北交所 4/8 开头、美股等）不支持，归入 ``missing``
       返回，由调用方跳过。
     - 进程内 TTL 缓存（60 秒），按单只股票粒度缓存：请求集与缓存集有交集时
       只拉取过期/缺失部分，批量请求间天然去重。同步路由 + threading.Lock，
@@ -52,11 +56,15 @@ _CACHE_LOCK = threading.Lock()
 
 
 def qt_symbol(code: str) -> Optional[str]:
-    """把 6 位股票代码解析为腾讯行情符号（sh/sz 前缀）。
+    """把股票代码解析为腾讯行情符号（sh/sz/hk 前缀）。
 
-    6 开头 → 沪市 ``sh{code}``；0/3 开头 → 深市 ``sz{code}``；
-    其余（北交所/港美股等）返回 None（不支持）。
+    5 位数字 → 港股 ``hk{code}``（powercloud 重仓口径的港股代码为 5 位，
+    如 00700/01810；长度判断须先于 0/3/6 前缀判断，否则 "00700" 会被误判
+    为深市）；6 开头 → 沪市 ``sh{code}``；0/3 开头 → 深市 ``sz{code}``；
+    其余（北交所 4/8 开头、美股等）返回 None（不支持）。
     """
+    if len(code) == 5 and code.isdigit():
+        return f"hk{code}"
     if code.startswith("6"):
         return f"sh{code}"
     if code.startswith("0") or code.startswith("3"):
@@ -105,14 +113,13 @@ def _request_text(symbols: List[str]) -> Optional[str]:
 
 
 def _parse_line(line: str) -> Optional[Dict[str, Any]]:
-    """解析单行 ``v_sh600519="1~贵州茅台~600519~..."`` 为响应条目。"""
+    """解析单行 ``v_sh600519="1~贵州茅台~600519~..."`` 为响应条目。
+
+    A 股（``v_sh``/``v_sz``）与港股（``v_hk``）行格式一致：关键字段位置
+    相同，仅港股时间为 ``2026/09/21 14:19:48`` 斜杠格式（时间解析兼容）。
+    """
     # 跳过 v_pv_none_match 等无效行
-    match_prefix = None
-    for prefix in ("v_sh", "v_sz"):
-        if line.startswith(prefix):
-            match_prefix = prefix
-            break
-    if match_prefix is None:
+    if not line.startswith(("v_sh", "v_sz", "v_hk")):
         return None
     parts = line.split("~")
     if len(parts) < 33:
