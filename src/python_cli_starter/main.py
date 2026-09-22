@@ -18,6 +18,7 @@ from . import fund_info
 from . import fund_realtime
 from . import sector_capital
 from . import stock_realtime
+from . import gold_realtime
 
 # 日志配置
 logging.basicConfig(
@@ -657,4 +658,63 @@ def get_stocks_realtime_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取股票行情时发生内部错误: {str(e)}",
+        )
+
+
+@app.get(
+    "/gold/realtime",
+    response_model=schemas.GoldRealtimeResponse,
+    summary="批量获取上海黄金交易所贵金属实时行情",
+    tags=["Gold"],
+)
+def get_gold_realtime_api(
+    codes: str = Query(
+        ...,
+        description="逗号分隔的贵金属代码，如 `AU9999`（支持 AU9999 沪金99 / AUTD 黄金延期，上限 10 个）",
+    ),
+):
+    """
+    批量获取上海黄金交易所贵金属实时最新价与当日涨跌幅（供黄金类基金自算估值）。
+
+    数据来源：新浪财经贵金属行情（gds_ 接口，需 Referer），进程内 60 秒 TTL
+    缓存。涨跌幅按 (最新价 - 昨收) / 昨收 计算；SGE 夜市（20:00-02:30）归属
+    次一交易日，涨跌幅天然包含隔夜跳空，与黄金基金净值口径一致。
+
+    - **quotes**: 成功获取的行情 `{code, name, price, prevClose, changePct,
+      date, time}`（未开盘等场景 price/changePct 为 null）
+    - **missing**: 不支持的代码或拉取失败的代码，调用方对黄金基金整体跳过
+
+    错误响应：
+    - `400`: codes 参数缺失/为空、含不支持的贵金属代码，或超过 10 个
+    """
+    logger.info(f"贵金属行情查询请求: codes='{codes[:100]}'")
+
+    code_list = [c.strip() for c in str(codes).split(",") if c.strip()]
+    if not code_list:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="codes 参数不能为空，格式如 codes=AU9999。",
+        )
+
+    invalid = [c for c in code_list if c.upper() not in gold_realtime._GDS_CODES]
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不支持的贵金属代码（支持 {'/'.join(gold_realtime._GDS_CODES)}）：{invalid[:5]}",
+        )
+
+    if len(code_list) > gold_realtime._MAX_CODES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"单次最多查询 {gold_realtime._MAX_CODES} 个合约，当前 {len(code_list)} 个。",
+        )
+
+    try:
+        result = gold_realtime.get_gold_realtime(code_list)
+        return schemas.GoldRealtimeResponse(count=len(result["quotes"]), **result)
+    except Exception as e:
+        logger.exception("批量获取贵金属行情时发生意外错误")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取贵金属行情时发生内部错误: {str(e)}",
         )

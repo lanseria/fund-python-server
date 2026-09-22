@@ -32,6 +32,8 @@ src/python_cli_starter/
 ├── fund_info.py            # 基金完整信息聚合（基本信息+历史净值+费率）
 ├── fund_realtime.py        # 基金实时估值（powercloud 聚合）与昨日净值
 ├── sector_capital.py       # 板块主力资金数据（东财数据中心）
+├── stock_realtime.py       # 股票批量实时行情（腾讯，A股 sh/sz + 港股 hk）
+├── gold_realtime.py        # 上海黄金交易所贵金属实时行情（新浪 gds_，Au9999）
 └── strategies/             # 量化策略模块
     ├── __init__.py                # 策略注册表
     ├── rsi_strategy.py            # RSI 策略
@@ -47,6 +49,8 @@ tests/
 ├── test_fund_fee.py     # 基金手续费接口测试
 ├── test_fund_info.py    # 基金完整信息接口测试
 ├── test_fund_realtime.py # 基金实时估值与昨日净值接口测试
+├── test_stock_realtime.py # 股票批量实时行情接口测试
+├── test_gold_realtime.py # 贵金属实时行情接口测试
 └── test_sector_capital.py # 板块主力资金接口测试
 ```
 
@@ -61,6 +65,8 @@ tests/
 | `GET /funds/{fund_code}/fee` | 获取基金手续费信息 |
 | `GET /fund/info/{fundCode}` | 获取单只基金完整信息（基本信息+历史净值+费率） |
 | `GET /fund/realtime/{fundCode}` | 获取基金盘中实时估值（分钟级，powercloud 聚合） |
+| `GET /stocks/realtime` | 批量获取 A股/港股股票实时行情（腾讯） |
+| `GET /gold/realtime` | 获取上海黄金交易所贵金属实时行情（新浪 gds_，Au9999/AUTD） |
 | `GET /fund/nav/{fundCode}` | 获取基金昨日真实净值 |
 | `GET /sector/capital` | 获取板块主力资金数据表（行业/概念，实时） |
 | `GET /sector/capital/action/{sector_name}` | 按板块名查询主力行为（精确+模糊兜底） |

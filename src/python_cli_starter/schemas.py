@@ -232,3 +232,31 @@ class StockRealtimeResponse(BaseModel):
     count: int                                         # stocks 条数
     stocks: List[StockRealtimeItem]
     missing: List[str] = []
+
+
+class GoldRealtimeItem(BaseModel):
+    """上海黄金交易所贵金属实时行情单项（供黄金类基金自算估值使用）。
+
+    数据来源：新浪财经贵金属行情（``gds_`` 接口）。``changePct`` 按
+    ``(最新价 - 昨收) / 昨收`` 计算；SGE 夜市（20:00-02:30）归属次一
+    交易日，涨跌幅天然包含隔夜跳空，与基金净值口径一致。
+    """
+
+    code: str                                          # 贵金属代码（AU9999 沪金99 / AUTD 黄金延期）
+    name: str = ""                                     # 合约名称（如 "沪金99"）
+    price: Optional[float] = None                      # 最新价（元/克，未开盘/无行情为 None）
+    prevClose: Optional[float] = None                  # 昨收（元/克）
+    changePct: Optional[float] = None                  # 当日涨跌幅（%，按昨收计算，无昨收为 None）
+    date: str = ""                                     # 行情日期（yyyy-mm-dd，北京时间）
+    time: str = ""                                     # 行情时间（HH:mm:ss，北京时间）
+
+
+class GoldRealtimeResponse(BaseModel):
+    """贵金属批量实时行情响应。
+
+    ``quotes`` 为成功获取的行情；``missing`` 为不支持的代码或上游拉取失败
+    的代码，调用方（Nuxt 端自算估值）对黄金基金整体跳过本轮。
+    """
+    count: int                                         # quotes 条数
+    quotes: List[GoldRealtimeItem]
+    missing: List[str] = []
